@@ -1,0 +1,23 @@
+.chat-panel {
+  position: absolute; top: 20px; right: 20px; z-index: 1000;
+  display: flex; flex-direction: column;
+  width: 340px; max-width: calc(100% - 72px);
+  height: 420px; max-height: calc(100% - 32px); overflow: hidden;
+  border: 2px solid var(--room-pin, #687e88); border-radius: 22px;
+  background: var(--room-tint, #f8fafb);
+  box-shadow: 0 16px 48px #1e293b24, 0 2px 8px #1e293b12;
+  font-size: 13px;
+}
+@supports (backdrop-filter: blur(18px)) or (-webkit-backdrop-filter: blur(18px)) {
+  .chat-panel {
+    background: color-mix(in srgb, var(--room-tint, #f8fafb) 86%, transparent);
+    -webkit-backdrop-filter: blur(18px) saturate(130%);
+    backdrop-filter: blur(18px) saturate(130%);
+  }
+}
+@media (max-width: 600px) {
+  .chat-panel { top: 12px; right: 12px; width: 300px; max-height: calc(100% - 24px); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .chat-panel { background: var(--room-tint, #f8fafb); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}

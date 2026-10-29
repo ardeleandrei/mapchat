@@ -1,40 +1,40 @@
 # Build Vue frontend
 FROM node:24-bookworm-slim AS web-build
-WORKDIR /build/web
+WORKDIR /build/frontend
 
-COPY web/package.json web/package-lock.json ./
+COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
-COPY web/ ./
+COPY frontend/ ./
 RUN npm run build
 
 # Compile Node backend
 FROM node:24-bookworm-slim AS server-build
-WORKDIR /build/server
+WORKDIR /build/backend
 
-COPY server/package.json server/package-lock.json ./
+COPY backend/package.json backend/package-lock.json ./
 RUN npm ci
 
-COPY server/ ./
+COPY backend/ ./
 RUN npm run build
 
 # Install backend runtime dependencies
 FROM node:24-bookworm-slim AS server-deps
-WORKDIR /build/server
+WORKDIR /build/backend
 
-COPY server/package.json server/package-lock.json ./
+COPY backend/package.json backend/package-lock.json ./
 RUN npm ci --omit=dev
 
 # Production runtime
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
 ENV PORT=3000
-WORKDIR /app/server
+WORKDIR /app/backend
 
-COPY --from=server-deps --chown=node:node /build/server/package.json ./
-COPY --from=server-deps --chown=node:node /build/server/node_modules ./node_modules
-COPY --from=server-build --chown=node:node /build/server/dist ./dist
-COPY --from=web-build --chown=node:node /build/web/dist ./public
+COPY --from=server-deps --chown=node:node /build/backend/package.json ./
+COPY --from=server-deps --chown=node:node /build/backend/node_modules ./node_modules
+COPY --from=server-build --chown=node:node /build/backend/dist ./dist
+COPY --from=web-build --chown=node:node /build/frontend/dist ./public
 
 USER node
 EXPOSE 3000

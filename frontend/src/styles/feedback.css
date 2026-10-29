@@ -1,0 +1,4 @@
+.notice { flex-shrink: 0; margin: 0; padding: 9px 16px; background: #fff6dc; font-size: 12px; line-height: 1.5; }
+.notice.error, .field-error { background: #fff1ec; color: #9b3227; }
+.notice button { border: 0; padding: 2px 4px; background: transparent; font: inherit; text-decoration: underline; }
+.field-error { margin: 6px 0 0; padding: 7px 9px; border-radius: 8px; font-size: 12px; }
