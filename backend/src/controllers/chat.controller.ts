@@ -8,6 +8,12 @@ export function chatController(service: Service, action: keyof Service): Request
     const visitor = currentUser(response);
     const user = { id: visitor._id.toHexString(), username: visitor.username };
     const actions = {
+      myRooms: () => service.myRooms(user, request.query),
+
+      unreadCounts: () => service.unreadCounts(user, request.query),
+
+      markRoomRead: () => service.markRoomRead(user, request.params.roomId, request.body),
+
       myMessages: () => service.myMessages(user, request.query),
 
       listRooms: () => service.listRooms(request.query),

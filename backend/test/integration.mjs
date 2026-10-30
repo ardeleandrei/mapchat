@@ -14,6 +14,7 @@ function visitor() {
     async request(path, method = "GET", body, status = 200) {
       const response = await fetch(base + "/api" + path, {
         method, headers: { ...(cookie ? { Cookie: cookie } : {}),
+          ...(method === "GET" ? {} : { "X-Wolfchatter-Request": "1" }),
           ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(10_000),
@@ -60,8 +61,31 @@ try {
   const a = visitor(), b = visitor();
   const first = await a.request("/me"), second = await b.request("/me");
   assert.notEqual(first.user.id, second.user.id);
-  await a.request("/me", "PATCH", { username: "Backend check A" });
-  await b.request("/me", "PATCH", { username: "Backend check B" });
+  const nameA = "Check A " + randomUUID().slice(0, 16), nameB = "Check B " + randomUUID().slice(0, 16);
+  const password = "Integration passphrase " + randomUUID();
+  const guestCookie = a.cookie;
+  await a.request("/rooms", "POST", {}, 403);
+  await a.request("/auth/register", "POST", { username: nameA, password }, 201);
+  await b.request("/auth/register", "POST", { username: nameB, password }, 201);
+  assert.notEqual(a.cookie, guestCookie);
+  assert.equal((await a.request("/me")).user.id, first.user.id);
+  await b.request("/me", "PATCH", { username: "  " + nameA.toUpperCase() + "  " }, 409);
+  await b.request("/me", "PATCH", { username: nameA.replaceAll(" ", "   ") }, 409);
+  await b.request("/me", "PATCH", { username: nameA.replace(/C/g, "Ｃ") }, 409);
+  await b.request("/me", "PATCH", { username: nameA + "\u200b" }, 400);
+  assert.equal((await b.request("/me")).user.username, nameB);
+  assert.equal((await a.request("/me", "PATCH", { username: nameA })).user.username, nameA);
+  const c = visitor(), d = visitor();
+  await c.request("/me"); await d.request("/me");
+  const raceName = "Race " + randomUUID().slice(0, 16);
+  const claimResults = await Promise.all([c, d].map(async client => {
+    const response = await fetch(base + "/api/auth/register", { method: "POST", headers: {
+      Cookie: client.cookie, "Content-Type": "application/json", "X-Wolfchatter-Request": "1",
+    }, body: JSON.stringify({ username: raceName, password }) });
+    return response.status;
+  }));
+  assert.deepEqual(claimResults.sort(), [201, 409]);
+  console.log("PASS: unique usernames, canonical comparisons, owner reuse and concurrent claims.");
   const liveA = await connect(a), liveB = await connect(b);
   const roomBody = { longitude: 26.1025, latitude: 44.4268, creationKey: randomUUID(), title: "Named integration room" };
   const { room } = await a.request("/rooms", "POST", roomBody, 201);
@@ -110,7 +134,7 @@ try {
   await a.request("/me", "PATCH", { lastRoomId: room.id });
   const restored = await a.request("/me");
   assert.equal(restored.user.id, first.user.id);
-  assert.equal(restored.user.username, "Backend check A");
+  assert.equal(restored.user.username, nameA);
   assert.equal(restored.user.lastRoomId, room.id);
   const multiple = randomUUID();
   liveB.socket.send(JSON.stringify({ type: "subscribe.rooms", roomIds: [room.id, other.id], requestId: multiple }));
@@ -148,6 +172,26 @@ try {
   liveA.socket.send(JSON.stringify({ type: "subscribe", roomId: room.id, requestId: deletedJoin }));
   await liveA.wait(event => event.type === "error" && event.requestId === deletedJoin);
   assert.equal((await b.request("/rooms/" + other.id)).room.id, other.id);
+  const recovered = visitor();
+  await recovered.request("/auth/login", "POST", { username: nameB.toUpperCase(), password: "incorrect" }, 401);
+  const login = await recovered.request("/auth/login", "POST", { username: nameB.toUpperCase(), password });
+  assert.equal(login.user.id, second.user.id);
+  assert.equal(login.user.registered, true);
+  assert.equal(login.user.passwordHash, undefined);
+  await recovered.request("/rooms/" + other.id, "PATCH", { title: "Owned after cross-browser login", revision: 0 });
+  await b.request("/me", "PATCH", { lastRoomId: other.id });
+  const closed = once(liveB.socket, "close"), revokedCookie = b.cookie;
+  await b.request("/auth/logout", "POST", {});
+  assert.equal((await closed)[0], 4401);
+  const revoked = await fetch(base + "/api/rooms", { headers: { Cookie: revokedCookie } });
+  assert.equal(revoked.status, 401);
+  assert.equal((await b.request("/me")).user.registered, false);
+  await b.request("/auth/login", "POST", { username: nameB, password });
+  const signedBackIn = await b.request("/me");
+  assert.equal(signedBackIn.user.id, second.user.id);
+  assert.equal(signedBackIn.user.lastRoomId, other.id);
+  assert.equal((await recovered.request("/me")).user.id, second.user.id, "logging out one browser preserves the other session");
+  console.log("PASS: password registration, cross-browser sign-in/ownership, logout revocation and account restoration.");
   console.log("PASS: creator-only deletion, live removal, message cleanup, cleared profile, hidden pins/nearby results and safe retries.");
   console.log("PASS: two visitors, session ownership, live pins/messages, room isolation, retries, history and profile restoration.");
   console.log("PASS: custom room names, persistent title/color edits, creator ownership, validation, stale-edit conflicts and live room updates.");

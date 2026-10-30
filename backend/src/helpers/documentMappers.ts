@@ -14,6 +14,12 @@ export function toMessage(document: MessageDocument): Message {
 }
 
 export function toUser(document: UserDocument): User {
-  const { _id, lastRoomId, ...rest } = document;
-  return { ...rest, id: _id.toHexString(), lastRoomId: lastRoomId?.toHexString() ?? null };
+  // Explicit public fields prevent credentials leaking through a future spread.
+  return {
+    id: document._id.toHexString(),
+    username: document.username,
+    lastRoomId: document.lastRoomId?.toHexString() ?? null,
+    createdAt: document.createdAt,
+    registered: Boolean(document.passwordHash),
+  };
 }

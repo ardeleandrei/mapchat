@@ -1,6 +1,6 @@
 # Wolfchatter
 
-A map-based chat app built with Vue 3, Pinia, Leaflet, Node.js/Express, MongoDB, and native WebSockets.
+A map-based chat app built with Vue 3, Pinia, VueUse, Leaflet, Node.js/Express, MongoDB, and native WebSockets.
 
 ## Run with Docker
 
@@ -24,7 +24,17 @@ npm run dev
 Open http://127.0.0.1:5173. Vite proxies `/api` and `/ws` to the Docker backend on port 3000.
 To develop the backend outside Docker, stop only the app container (`docker compose stop app`), copy `backend/.env.example` to `backend/.env`, and run `npm run dev` in `backend`.
 
-Use the same hostname and browser profile to retain your anonymous identity. `localhost` and `127.0.0.1` have separate cookies. Sessions expire after 180 days; display names are not login credentials.
+## Accounts and sessions
+
+Use **Sign in / Create account** beside the map controls. Guests can read rooms and live messages; creating/editing/deleting rooms and sending messages require sign-in. Registration asks for a unique username and a password of 8–128 characters. It upgrades the current guest profile without changing its user ID. Sign into another browser with the same credentials to recover your identity, room ownership, and last selected room.
+
+Passwords are stored as salted Argon2id hashes (`@node-rs/argon2`, 19 MiB memory, 2 iterations, parallelism 1). Passwords and hashes are never included in public profile responses. Login verifies the password, then rotates a random session token; MongoDB stores only its SHA-256 hash. Sessions last 30 days. The browser holds an HttpOnly, SameSite=Lax cookie, with Secure enabled for HTTPS production. `localhost` and `127.0.0.1` have separate cookies, but both can sign into the same account.
+
+Users are stored in MongoDB. Registering or saving a username reserves its normalized key with a unique index: case, repeated whitespace, and Unicode compatibility variants compare equally. Another visitor receives HTTP 409, including during simultaneous claims; control/hidden characters are rejected. Login uses the same comparison rules. Message creation also verifies ownership of the current name. Failed claims preserve the profile and draft. Renaming changes your sign-in username and releases the previous name; historical messages retain their original author ID and name snapshot.
+
+Use the profile button beside the map controls, or **Edit profile** in a chat, to change your username or sign out. Changes are saved explicitly and apply to every chat. Composers display the current name; sending a message does not edit your profile. Canceling or a failed save preserves the current profile and drafts. Sign-out revokes only this browser's session, closes its WebSocket, and clears in-memory windows/drafts. Other signed-in browsers remain connected. Account switching ignores stale HTTP/WebSocket responses from the previous identity.
+
+`POST /api/auth/register`, `/api/auth/login`, and `/api/auth/logout` manage accounts/sessions; `GET /api/me` bootstraps a guest or restores the current user (`registered` indicates account status). Mutating requests must send `X-Wolfchatter-Request: 1`; the frontend HTTP client supplies it. Origin/Sec-Fetch-Site checks and same-origin custom-header enforcement protect cookie-authenticated writes, including login/logout. Login and registration share a 20-request/15-minute IP limit. Invalid login responses do not reveal whether a username exists. Database startup creates indexes; there are no migrations. Password changes, forgotten-password recovery/email verification, MFA, and protection against every visually similar Unicode character are outside this version.
 
 ## Structure and responsibilities
 
@@ -33,10 +43,11 @@ frontend/src/
   components/map/       Leaflet map and clustered pins
   components/chat/      Window/header, message list/composer, minimized sidebar
   components/rooms/     Separate create/edit dialogs with a shared RoomForm
+  components/profile/   Account registration/login, profile editing and sign-out
   composables/          Reactive UI behavior (dragging)
   stores/               Session, window layout/drafts, chat data/coordinator
   clients/              HTTP and WebSocket transport
-  services/             Room, message and profile API operations
+  services/             Room, message, profile and authentication API operations
   utils/                Pure color and message-reconciliation helpers
 
 backend/src/
@@ -45,7 +56,7 @@ backend/src/
   types/                User, room, message and repository interfaces
   errors/               Application error classes
   schemas/              Request validation
-  services/             Rooms, messages, profile rules, history/retry coordination
+  services/             Authentication, rooms, messages, profiles, history/retries
   repositories/         MongoDB queries and atomic updates
   middleware/           Consistent HTTP error handling
   helpers/              Document/response mapping, cursors and persistence helpers
@@ -58,6 +69,8 @@ backend/src/
 
 Components display data and handle interaction. Stores coordinate shared state through services; utilities contain pure functions. Session and window stores own their state; the chat store composes them and coordinates history/live updates. No router is needed for the current single workspace.
 
+VueUse supplies pointer dragging, resize observation, debounced map-bound updates, and lifecycle-managed browser event listeners. `useDraggablePanel` wraps it with keyboard movement, viewport margins, initial window placement, and header-button exclusions. Dialogs, forms, and chat windows remain custom Vue components.
+
 Vue files use template, script, then scoped styles. Component-specific CSS lives with its component; `src/styles/` contains scoped shared panel/dialog surfaces, form controls, and feedback styles. `style.css` contains only page defaults, common element behavior, and accessibility utilities. Leaflet-generated markers use deep selectors anchored to the map component. Room theme variables inherit from chat windows into their child components.
 
 Backend services receive repository interfaces rather than a database connection. Records crossing that boundary use string IDs and ordinary dates. MongoDB filters, ObjectId conversion, cursor query ordering, and duplicate-key error translation live in repository adapters. The message service validates pagination, decodes cursors, and assembles history responses; cursor utilities perform no persistence. Routes and identity setup wire the concrete adapters into services. WebSocket room-existence checks also use the room repository.
@@ -66,7 +79,11 @@ HTTP writes are persisted before WebSocket broadcasts. Room creation and message
 
 Creators can choose **Edit → Delete chatroom…**, then confirm deletion. `DELETE /api/rooms/:id` enforces creator ownership, removes the room's messages, and clears saved last-room references. The pin and open/minimized chats disappear through `room.deleted` events; reconnect/history refresh also removes rooms deleted while offline. The room document is retained with `deletedAt` as a tombstone, excluded from normal reads and map/nearby queries. This preserves ownership and creation keys for safe cleanup retries and prevents old create requests from resurrecting the room. There is no restore action. An in-flight message write checks room availability and removes itself if deletion won the race.
 
-MongoDB persists users, sessions, rooms, and messages. Pinia keeps transient frontend state in memory; drafts and window positions are not persisted. The geographic index and nearby API exist; user-facing name/city/coordinate search remains planned in `BACKLOG.md`.
+MongoDB persists users, sessions, rooms, messages, and per-user room read positions. On sign-in/reload, every room created by the user appears in the sidebar, independent of the map viewport and the 20-open-window limit. Owned rooms start minimized; selecting one opens it. Created-room entries remain in the sidebar while their windows are open, minimized, or closed, and disappear only when the room is deleted. Sidebar entries have no close button. Other rooms still appear when manually minimized.
+
+Each sidebar entry shows its own unread badge, hidden at zero and capped at **99+**. Unread means messages from other users newer than the saved read position. A visible open chat is marked read through the latest message loaded into its view; minimized chats and hidden browser tabs retain unread messages. Read positions advance monotonically in MongoDB and synchronize across signed-in browsers. Owner sockets receive updates even when their created rooms have no open window; other rooms use the existing room subscriptions. WebSocket events trigger batched unread-count refreshes, with no periodic polling. HTTP/history retries cannot double-count saved messages.
+
+`GET /api/me/rooms` paginates created rooms; `GET /api/me/unread?roomIds=...` returns up to 100 per-room counts, capped at 100 for display; `POST /api/rooms/:id/read` accepts a message ID from that room and advances the current user's read marker. Room deletion also removes read markers. Pinia keeps drafts/window positions in memory. The geographic index and nearby API exist; user-facing name/city/coordinate search remains planned in `BACKLOG.md`.
 
 The current realtime fan-out is in-process. Multiple app replicas would require a shared event broker; this refactor retains the single-process deployment.
 
@@ -78,9 +95,11 @@ npm --prefix frontend test
 npm --prefix backend test
 # Requires the Docker app and database running:
 npm --prefix backend run test:integration
+# Isolated unread tests: temporary MongoDB database, removed after the test:
+npm --prefix backend run test:unread
 ```
 
-Integration tests create diagnostic rooms/messages and preserve existing records. The UI supports multiple chats, minimizing/closing, dragging, and double-clicking a chat header to focus its pin. Window activation and closing do not recenter the map.
+Integration tests create diagnostic rooms/messages and preserve existing records. The UI supports multiple chats, minimizing/closing, dragging, and double-clicking a chat header to focus its pin. Drag the bottom-left grip to resize a chat (the right edge stays fixed), or focus the grip and use arrow keys (Shift for larger steps). Windows start at 340 × 420 px on desktop, with the existing responsive sizing on small screens. Sizes remain while minimized; closing/reopening or reloading starts with the default size. Room Edit controls are shown only to their creator. Window activation, resizing, and closing do not recenter the map.
 
 ## Environment
 

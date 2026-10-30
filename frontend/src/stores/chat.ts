@@ -1,14 +1,16 @@
 import { mergeMessages } from "../utils/messageHistory";
 import { roomsService } from "../services/rooms.service";
 import { profileService } from "../services/profile.service";
+import { authService } from "../services/auth.service";
 import { messagesService } from "../services/messages.service";
 import { useSession } from "./session.store";
 import { useWindows } from "./windows.store";
+import { useUnread } from "./unread.store";
 import { computed, reactive, ref } from "vue";
 import { defineStore, storeToRefs } from "pinia";
 import { ApiError } from "../clients/http.client";
 import { LiveClient, Superseded } from "../clients/websocket.client";
-import type { Connection, HistoryPage, Message, Room } from "../types";
+import type { Connection, HistoryPage, Message, Room, User } from "../types";
 
 interface History {
   items: Message[]; before: string | null; after: string | null;
@@ -16,8 +18,12 @@ interface History {
 }
 export type { ChatWindowState } from "./windows.store";
 export const useChat = defineStore("chat", () => {
-  const session = useSession(), layout = useWindows();
-  const { user, ready, starting, savingName } = storeToRefs(session);
+  const session = useSession(), layout = useWindows(), unread = useUnread();
+  const { counts: unreadCounts, error: unreadError } = storeToRefs(unread);
+  const ownedRoomIds = ref(new Set<string>());
+  const sidebarError = ref("");
+  let sidebarRequest = 0;
+  const { user, ready, starting, savingName, authBusy, authOpen } = storeToRefs(session);
   const { windows, selectedRoomId, drafts } = storeToRefs(layout);
   const rooms = ref<Room[]>([]);
   const deletedRooms = new Set<string>();
@@ -26,6 +32,10 @@ export const useChat = defineStore("chat", () => {
   const openChats = computed(() => windows.value.flatMap(entry => {
     const room = rooms.value.find(item => item.id === entry.id);
     return room ? [{ entry, room }] : [];
+  }));
+  const sidebarRooms = computed(() => rooms.value.filter(room => {
+    const entry = windows.value.find(item => item.id === room.id);
+    return ownedRoomIds.value.has(room.id) || Boolean(entry?.minimized);
   }));
   const creating = ref(false);
   const error = ref(""), mapError = ref(""), truncated = ref(false);
@@ -37,6 +47,8 @@ export const useChat = defineStore("chat", () => {
   const newRoomLocation = ref<{ longitude: number; latitude: number } | null>(null);
 
   function requestRoom(longitude: number, latitude: number) {
+    if (!user.value?.registered) { authOpen.value = true; return; }
+    if (authBusy.value) return;
     if (windows.value.length >= 20) { error.value = "Close a chat before opening more (20 maximum)."; return; }
     if (ready.value && !creating.value) newRoomLocation.value = { longitude, latitude };
   }
@@ -66,6 +78,35 @@ export const useChat = defineStore("chat", () => {
     if (deletedRooms.has(id)) return;
     const state = history(id);
     state.items = mergeMessages(state.items, incoming);
+    markVisible(id);
+  }
+
+  function markVisible(id: string) {
+    if (!ready.value || !user.value?.registered || document.hidden || !histories[id]?.loaded) return;
+    if (!windows.value.some(entry => entry.id === id && !entry.minimized)) return;
+    const latest = histories[id]?.items.at(-1);
+    if (latest) void unread.mark(id, latest.id);
+  }
+
+  async function refreshSidebar() {
+    if (!ready.value || !user.value?.registered) return;
+    const identity = identityVersion, request = ++sidebarRequest, startedVersion = roomVersion;
+    try {
+      const collected: Room[] = [];
+      let after: string | undefined;
+      do {
+        const page = await roomsService.mine(after);
+        if (identity !== identityVersion || request !== sidebarRequest) return;
+        collected.push(...page.rooms); after = page.nextCursor ?? undefined;
+      } while (after);
+      const ids = new Set(collected.map(room => room.id));
+      for (const id of ownedRoomIds.value) {
+        if (!ids.has(id) && (roomVersions.get(id) ?? 0) <= startedVersion) forgetRoom(id);
+      }
+      for (const room of collected) upsert(room);
+      sidebarError.value = "";
+      await unread.refresh([...ownedRoomIds.value, ...windows.value.map(entry => entry.id)]);
+    } catch (cause) { if (identity === identityVersion && request === sidebarRequest) sidebarError.value = report(cause); }
   }
 
   function visible(room: Room) {
@@ -80,6 +121,7 @@ export const useChat = defineStore("chat", () => {
     if (deletedRooms.has(room.id)) return;
     const existing = rooms.value.find(item => item.id === room.id);
     if ((existing?.revision ?? 0) > (room.revision ?? 0)) return;
+    if (user.value?.registered && room.createdBy === user.value.id) ownedRoomIds.value.add(room.id);
     roomVersions.set(room.id, ++roomVersion);
     rooms.value = [...rooms.value.filter(r => r.id !== room.id), room]
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
@@ -92,7 +134,7 @@ export const useChat = defineStore("chat", () => {
       const result = await roomsService.list(bounds);
       if (request !== roomRequest || identity !== identityVersion) return;
       // Preserve pins delivered while the HTTP viewport request was in flight.
-      const keep = rooms.value.filter(r => windows.value.some(entry => entry.id === r.id) ||
+      const keep = rooms.value.filter(r => ownedRoomIds.value.has(r.id) || windows.value.some(entry => entry.id === r.id) ||
         (visible(r) && (roomVersions.get(r.id) ?? 0) > startedVersion));
       const merged = new Map(keep.map(room => [room.id, room]));
       for (const room of result.rooms) {
@@ -101,7 +143,7 @@ export const useChat = defineStore("chat", () => {
       }
       rooms.value = [...merged.values()];
       truncated.value = result.truncated; mapError.value = "";
-    } catch (cause) { if (request === roomRequest) mapError.value = report(cause); }
+    } catch (cause) { if (request === roomRequest && identity === identityVersion) mapError.value = report(cause); }
   }
 
   function setBounds(value: string) { bounds = value; void refreshRooms(); }
@@ -144,6 +186,7 @@ export const useChat = defineStore("chat", () => {
             more = page.direction === "newer" && page.nextCursor !== null;
           }
         }
+        if (identity === identityVersion) markVisible(id);
       } catch (cause) {
         if (identity === identityVersion) {
           if (cause instanceof ApiError && cause.status === 404) forgetRoom(id);
@@ -185,12 +228,13 @@ export const useChat = defineStore("chat", () => {
     }
     entry.minimized = false; layout.raise(entry);
     upsert(room); selectedRoomId.value = room.id;
+    markVisible(room.id);
     const version = ++selectionVersion, identity = identityVersion;
     void syncSelected();
     selectionSave = selectionSave.catch(() => {}).then(async () => {
       if (identity !== identityVersion) return;
       const result = await profileService.update({ lastRoomId: room.id });
-      if (version === selectionVersion && user.value) user.value.lastRoomId = result.user.lastRoomId;
+      if (identity === identityVersion && version === selectionVersion && user.value) user.value.lastRoomId = result.user.lastRoomId;
     }).catch(cause => { if (version === selectionVersion) error.value = report(cause); });
     await selectionSave;
   }
@@ -205,13 +249,14 @@ export const useChat = defineStore("chat", () => {
     selectionSave = selectionSave.catch(() => {}).then(async () => {
       if (identity !== identityVersion) return;
       await profileService.update({ lastRoomId: id });
-      if (user.value) user.value.lastRoomId = id;
+      if (identity === identityVersion && user.value) user.value.lastRoomId = id;
     }).catch(cause => { error.value = report(cause); });
   }
 
   function minimizeRoom(id: string) {
     const entry = windows.value.find(item => item.id === id);
     if (entry) entry.minimized = true;
+    if (user.value?.registered) void unread.refresh([id]);
   }
 
   function closeRoom(id: string) {
@@ -224,13 +269,14 @@ export const useChat = defineStore("chat", () => {
     selectionSave = selectionSave.catch(() => {}).then(async () => {
       if (identity !== identityVersion) return;
       await profileService.update({ lastRoomId: selected });
-      if (user.value) user.value.lastRoomId = selected;
+      if (identity === identityVersion && user.value) user.value.lastRoomId = selected;
     }).catch(cause => { error.value = report(cause); });
   }
 
   function forgetRoom(id: string) {
     if (deletedRooms.has(id)) return;
     deletedRooms.add(id);
+    ownedRoomIds.value.delete(id); unread.forget(id);
     if (windows.value.some(entry => entry.id === id)) closeRoom(id);
     roomVersions.delete(id);
     rooms.value = rooms.value.filter(room => room.id !== id);
@@ -238,22 +284,26 @@ export const useChat = defineStore("chat", () => {
   }
 
   async function deleteRoom(id: string) {
-    try { await roomsService.remove(id); forgetRoom(id); }
-    catch (cause) { throw new Error(report(cause)); }
+    const identity = identityVersion;
+    try { await roomsService.remove(id); if (identity === identityVersion) forgetRoom(id); }
+    catch (cause) { if (identity === identityVersion) throw new Error(report(cause)); }
   }
 
   async function createRoom(longitude: number, latitude: number, retry = false, title?: string) {
-    if (!ready.value || creating.value) return false;
+    if (!user.value?.registered) { authOpen.value = true; return false; }
+    if (!ready.value || creating.value || authBusy.value) return false;
+    const identity = identityVersion;
     const previous = pendingPin.value;
     if (!previous || (!retry && (previous.longitude !== longitude || previous.latitude !== latitude || previous.title !== title)))
       pendingPin.value = { longitude, latitude, creationKey: crypto.randomUUID(), ...(title === undefined ? {} : { title }) };
     creating.value = true; error.value = "";
     try {
       const result = await roomsService.create(pendingPin.value!);
+      if (identity !== identityVersion) return false;
       pendingPin.value = null; newRoomLocation.value = null; await selectRoom(result.room);
       return true;
-    } catch (cause) { error.value = report(cause); return false; }
-    finally { creating.value = false; }
+    } catch (cause) { if (identity === identityVersion) error.value = report(cause); return false; }
+    finally { if (identity === identityVersion) creating.value = false; }
   }
   
   async function retryPin() {
@@ -265,61 +315,80 @@ export const useChat = defineStore("chat", () => {
     const name = value.trim(), identity = identityVersion;
     if (!name || name.length > 40) return Promise.reject(new Error("Enter a display name of 1–40 characters."));
     nameSave = nameSave.catch(() => {}).then(async () => {
-      if (identity !== identityVersion || !ready.value) throw new Error("Reconnect before saving your name.");
+      if (identity !== identityVersion || !ready.value || !user.value?.registered) throw new Error("Sign in before saving your profile.");
       if (user.value?.username === name) return;
       savingName.value = true;
       try {
         const result = await profileService.update({ username: name });
-        if (user.value?.id === result.user.id) user.value.username = result.user.username;
-      } finally { savingName.value = false; }
+        if (identity === identityVersion && user.value?.id === result.user.id) user.value.username = result.user.username;
+      } catch (cause) { throw new Error(report(cause)); }
+      finally { savingName.value = false; }
     });
     return nameSave;
   }
 
   async function updateRoom(room: Room, title: string, color: string) {
+    const identity = identityVersion;
     try {
       const result = await roomsService.update(room, title, color);
-      upsert(result.room);
-    } catch (cause) { throw new Error(report(cause)); }
+      if (identity === identityVersion) upsert(result.room);
+    } catch (cause) { if (identity === identityVersion) throw new Error(report(cause)); }
   }
 
-  async function send(id: string, name: string, value: string) {
-    if (sending[id] || !ready.value) return false;
+  async function send(id: string, value: string) {
+    if (sending[id] || !ready.value || authBusy.value) return false;
+    const identity = identityVersion;
     const text = value.trim();
     if (!text || text.length > 2000) { history(id).error = "Enter a message of 1–2,000 characters."; return false; }
     sending[id] = true; history(id).error = "";
     try {
-      await saveName(name);
+      await nameSave.catch(() => {});
+      if (!user.value?.registered || !user.value.username.trim()) throw new Error("Sign in through your profile before sending messages.");
+      if (identity !== identityVersion) return false;
       const previous = pendingMessages.get(id);
       const body = previous?.text === text ? previous : { text, clientMessageId: crypto.randomUUID() };
       pendingMessages.set(id, body);
       const result = await messagesService.send(id, body);
+      if (identity !== identityVersion) return false;
       merge(id, [result.message]); pendingMessages.delete(id);
       return true;
-    } catch (cause) { history(id).error = report(cause); return false; }
-    finally { sending[id] = false; }
+    } catch (cause) { if (identity === identityVersion) history(id).error = report(cause); return false; }
+    finally { if (identity === identityVersion) sending[id] = false; }
   }
 
-  async function start() {
+  function clearUserState() {
+    ownedRoomIds.value.clear(); unread.reset(); sidebarError.value = ""; sidebarRequest++;
+    for (const key of Object.keys(histories)) delete histories[key];
+    for (const key of Object.keys(sending)) delete sending[key];
+    tasks.clear(); creating.value = false; selectionVersion++;
+    pendingMessages.clear(); pendingPin.value = null; selectedRoomId.value = null;
+    windows.value = []; newRoomLocation.value = null; liveError.value = "";
+    for (const key of Object.keys(drafts.value)) delete drafts.value[key];
+  }
+
+  async function initialize(restoredUser?: User) {
     if (starting.value) return;
-    starting.value = true; error.value = ""; live?.stop();
+    const identity = ++identityVersion;
+    starting.value = true; ready.value = false; error.value = ""; live?.stop();
+    connection.value = "offline";
+    creating.value = false;
+    for (const key of Object.keys(sending)) sending[key] = false;
     try {
       const previousUser = user.value?.id;
-      const result = await profileService.get();
-      identityVersion++;
+      const result = restoredUser ? { user: restoredUser } : await profileService.get();
       if (previousUser && previousUser !== result.user.id) {
-        for (const key of Object.keys(histories)) delete histories[key];
-        pendingMessages.clear(); pendingPin.value = null; selectedRoomId.value = null;
-        windows.value = []; newRoomLocation.value = null;
-        for (const key of Object.keys(drafts.value)) delete drafts.value[key];
+        clearUserState();
       }
       user.value = result.user; ready.value = true;
       await refreshRooms();
+      await refreshSidebar();
       if (result.user.lastRoomId) {
         try {
           const restored = await roomsService.get(result.user.lastRoomId);
-          upsert(restored.room); selectedRoomId.value = restored.room.id;
-          if (!windows.value.some(entry => entry.id === restored.room.id))
+          upsert(restored.room);
+          const owned = result.user.registered && restored.room.createdBy === result.user.id;
+          if (!owned) selectedRoomId.value = restored.room.id;
+          if (!owned && !windows.value.some(entry => entry.id === restored.room.id))
             layout.open(restored.room.id);
         } catch (cause) {
           if (cause instanceof ApiError && cause.status === 404) {
@@ -329,19 +398,26 @@ export const useChat = defineStore("chat", () => {
         }
       }
       live = new LiveClient({
-        state: value => { connection.value = value; },
+        state: value => { if (identity === identityVersion) connection.value = value; },
 
         ready: id => {
+          if (identity !== identityVersion) return;
           if (id !== user.value?.id) { expired(); return; }
-          void refreshRooms(); void syncSelected();
+          void refreshRooms(); void refreshSidebar(); void syncSelected();
         },
-        expired,
+        expired: () => { if (identity === identityVersion) expired(); },
 
         event: event => {
+          if (identity !== identityVersion) return;
           if (event.type === "room.deleted") forgetRoom(event.roomId);
+          if (event.type === "room.read" && event.userId === user.value?.id) void unread.refresh([event.roomId]);
           if ((event.type === "room.created" || event.type === "room.updated") &&
-            (visible(event.room) || windows.value.some(entry => entry.id === event.room.id))) upsert(event.room);
-          if (event.type === "message.created" && windows.value.some(entry => entry.id === event.message.roomId)) merge(event.message.roomId, [event.message]);
+            (event.room.createdBy === user.value?.id || visible(event.room) || windows.value.some(entry => entry.id === event.room.id))) upsert(event.room);
+          if (event.type === "message.created") {
+            if (windows.value.some(entry => entry.id === event.message.roomId)) merge(event.message.roomId, [event.message]);
+            if (user.value?.registered && (ownedRoomIds.value.has(event.message.roomId) || windows.value.some(entry => entry.id === event.message.roomId)))
+              void unread.refresh([event.message.roomId]);
+          }
           if (event.type === "error") liveError.value = event.message;
         },
       });
@@ -351,16 +427,44 @@ export const useChat = defineStore("chat", () => {
     finally { starting.value = false; }
   }
 
+  async function start() {
+    await initialize();
+  }
+
+  async function authenticate(mode: "login" | "register", username: string, password: string) {
+    if (authBusy.value || starting.value) return;
+    authBusy.value = true;
+    try {
+      await Promise.all([nameSave.catch(() => {}), selectionSave.catch(() => {})]);
+      const result = await authService[mode](username.trim(), password);
+      await initialize(result.user);
+      authOpen.value = false;
+    } finally { authBusy.value = false; }
+  }
+
+  async function logout() {
+    if (authBusy.value || starting.value) return;
+    authBusy.value = true;
+    try {
+      await Promise.all([nameSave.catch(() => {}), selectionSave.catch(() => {})]);
+      await authService.logout();
+      identityVersion++; live?.stop(); ready.value = false; connection.value = "offline";
+      clearUserState(); user.value = null;
+      await start();
+    } finally { authBusy.value = false; }
+  }
+
   async function refresh() {
     if (!ready.value || document.hidden) return;
     live?.reconnectNow(); await refreshRooms();
+    await refreshSidebar();
     await Promise.all(windows.value.map(entry => loadHistory(entry.id)));
   }
 
   function stop() { live?.stop(); connection.value = "offline"; }
-  return { user, rooms, selectedRoomId, selectedRoom, currentHistory, ready, starting, windows, openChats, drafts, history,
+  return { user, rooms, selectedRoomId, selectedRoom, currentHistory, ready, starting, windows, openChats, sidebarRooms, unreadCounts, unreadError, sidebarError, refreshSidebar, drafts, history,
     activateRoom, minimizeRoom, closeRoom,
-    creating, savingName, error, mapError, truncated, sending, pendingPin, newRoomLocation, connection, liveError,
+    creating, savingName, authBusy, authOpen, error, mapError, truncated, sending, pendingPin, newRoomLocation, connection, liveError,
     requestRoom, updateRoom, deleteRoom,
-    start, stop, refresh, setBounds, selectRoom, createRoom, retryPin, saveName, send, loadHistory };
+    start, stop, refresh, setBounds, selectRoom, createRoom, retryPin, saveName, send, loadHistory, authenticate, logout };
 });

@@ -3,6 +3,8 @@ import { MongoClient, type ObjectId } from "mongodb";
 export interface UserDocument {
   _id: ObjectId;
   username: string;
+  usernameKey?: string;
+  passwordHash?: string;
   lastRoomId: ObjectId | null;
   createdAt: Date;
 }
@@ -13,6 +15,13 @@ export interface SessionDocument {
   userId: ObjectId;
   createdAt: Date;
   expiresAt: Date;
+  authenticated?: boolean;
+}
+
+export interface RoomReadDocument {
+  userId: ObjectId;
+  roomId: ObjectId;
+  readThrough: { createdAt: Date; id: ObjectId };
 }
 
 export interface RoomDocument {
@@ -55,8 +64,15 @@ export async function connectDatabase(uri: string) {
     const sessions = db.collection<SessionDocument>("sessions");
     const rooms = db.collection<RoomDocument>("rooms");
     const messages = db.collection<MessageDocument>("messages");
+    const roomReads = db.collection<RoomReadDocument>("roomReads");
 
     await Promise.all([
+      roomReads.createIndex({ userId: 1, roomId: 1 }, { unique: true, name: "user_room_read" }),
+      users.createIndex({ usernameKey: 1 }, {
+        name: "unique_username",
+        unique: true,
+        partialFilterExpression: { usernameKey: { $type: "string" } },
+      }),
       sessions.createIndex(
         { expiresAt: 1 },
         {
@@ -65,6 +81,7 @@ export async function connectDatabase(uri: string) {
         },
       ),
       rooms.createIndexes([
+        { key: { createdBy: 1, _id: 1 }, name: "creator_rooms" },
         {
           key: { location: "2dsphere" },
           name: "room_location",
@@ -101,6 +118,7 @@ export async function connectDatabase(uri: string) {
       sessions,
       rooms,
       messages,
+      roomReads,
     };
   } catch (error) {
     await client.close().catch(() => undefined);

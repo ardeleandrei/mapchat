@@ -1,10 +1,8 @@
 <template>
-        <div class="room-heading" :class="{ 'is-dragging': movable.dragging.value }" tabindex="0" aria-label="Move chat window with arrow keys"
+        <div :ref="movable.handle" class="room-heading" :class="{ 'is-dragging': movable.dragging.value }" tabindex="0" aria-label="Move chat window with arrow keys"
           title="Drag to move; double-click to focus the pin; use arrow keys to move"
           @dblclick.stop.prevent="emit('focusPin')"
-          @pointerdown="movable.pointerDown" @pointermove="movable.pointerMove"
-          @pointerup="movable.pointerEnd" @pointercancel="movable.pointerEnd"
-          @lostpointercapture="movable.pointerEnd" @keydown="movable.keyMove">
+          @keydown="movable.keyMove">
           <div class="room-title-row">
             <h1>{{ room.title }}</h1>
           </div>
@@ -12,8 +10,7 @@
             <button type="button" :aria-label="'Minimize ' + room.title" title="Minimize" @click="emit('minimize')">−</button>
             <button type="button" :aria-label="'Close ' + room.title" title="Close" @click="emit('close')">×</button>
           </div>
-          <button class="edit-room" :disabled="!canEdit"
-            :title="canEdit ? 'Edit title and color' : 'Only the creator can edit this room. Use the same browser profile and hostname used to create it.'"
+          <button v-if="canEdit" class="edit-room" title="Edit title and color"
             aria-label="Edit chatroom" @click="emit('edit')">Edit</button>
         </div>
 </template>

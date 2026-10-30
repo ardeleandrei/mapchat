@@ -13,6 +13,7 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from "vue";
+import { useDebounceFn, useResizeObserver } from "@vueuse/core";
 import L from "leaflet";
 import "leaflet.markercluster";
 import { useChat } from "../../stores/chat";
@@ -21,9 +22,8 @@ import { roomTheme } from "../../utils/roomTheme";
 const chat = useChat();
 const container = ref<HTMLDivElement | null>(null);
 const tileError = ref(false);
-let map: L.Map | undefined, observer: ResizeObserver | undefined;
+let map: L.Map | undefined;
 let clusters: L.MarkerClusterGroup | undefined;
-let timer: number | undefined;
 const markers = new Map<string, L.Marker>();
 
 const wrap = (value: number) => ((value + 180) % 360 + 360) % 360 - 180;
@@ -34,6 +34,9 @@ function publishBounds() {
   chat.setBounds([wide ? -180 : wrap(b.getWest()), Math.max(-90, b.getSouth()),
     wide ? 180 : wrap(b.getEast()), Math.min(90, b.getNorth())].join(","));
 }
+
+const publishBoundsLater = useDebounceFn(publishBounds, 250);
+useResizeObserver(container, () => map?.invalidateSize({ pan: false }));
 
 function syncMarkers() {
   if (!clusters) return;
@@ -137,11 +140,7 @@ onMounted(() => {
     if (event.originalEvent.detail > 1) return;
     const point = event.latlng.wrap(); chat.requestRoom(point.lng, point.lat);
   });
-  map.on("moveend", () => {
-    window.clearTimeout(timer); timer = window.setTimeout(publishBounds, 250);
-  });
-  observer = new ResizeObserver(() => map?.invalidateSize({ pan: false }));
-  observer.observe(container.value);
+  map.on("moveend", () => { void publishBoundsLater(); });
   syncMarkers(); publishBounds();
 });
 watch(() => [chat.rooms, chat.selectedRoomId], syncMarkers, { deep: true });
@@ -149,8 +148,8 @@ watch(() => chat.ready, value => { if (value) publishBounds(); });
 // Window activation (including closing or minimizing chats) must not move the map.
 // Recenter only through the explicit header double-click action above.
 onUnmounted(() => {
-  window.clearTimeout(timer);
-  observer?.disconnect(); map?.remove();
+  publishBoundsLater.cancel();
+  map?.remove(); map = undefined;
 });
 </script>
 

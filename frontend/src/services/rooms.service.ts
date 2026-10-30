@@ -1,6 +1,8 @@
 import { api } from "../clients/http.client";
 import type { Room } from "../types";
 export const roomsService = {
+  mine: (after?: string) => api<{ rooms: Room[]; nextCursor: string | null }>("/me/rooms" + (after ? "?after=" + after : "")),
+
   remove: (id: string) => api<{ roomId: string }>("/rooms/" + id, "DELETE"),
 
   list: (bounds: string) => api<{ rooms: Room[]; truncated: boolean }>("/rooms" + (bounds ? "?bbox=" + encodeURIComponent(bounds) : "")),

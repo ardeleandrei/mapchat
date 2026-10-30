@@ -9,9 +9,14 @@ import rateLimit from "express-rate-limit";
 import { ObjectId } from "mongodb";
 import { z } from "zod";
 import type { Database, UserDocument } from "./db.js";
+import { toUser } from "./helpers/documentMappers.js";
+import { createAuthRepository } from "./repositories/auth.repository.js";
+import { createAuthService } from "./services/auth.service.js";
+import { createAuthController } from "./controllers/auth.controller.js";
+import { createAuthRoutes } from "./routes/auth.routes.js";
 
 const COOKIE_NAME = "wolfchatter_session";
-const SESSION_DURATION_MS = 180 * 24 * 60 * 60 * 1000;
+const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -32,6 +37,11 @@ function readToken(cookieHeader: string | undefined) {
     : null;
 }
 
+export function sessionHash(cookieHeader: string | undefined) {
+  const token = readToken(cookieHeader);
+  return token ? hashToken(token) : null;
+}
+
 export async function findSessionUser(
   database: Database,
   cookieHeader: string | undefined,
@@ -44,7 +54,10 @@ export async function findSessionUser(
 
   if (!session) return null;
 
-  return createIdentityRepository(database).user(session.userId);
+  const user = await createIdentityRepository(database).user(session.userId);
+  // A previously issued anonymous token cannot become authenticated by registration.
+  if (Boolean(user?.passwordHash) !== Boolean(session.authenticated)) return null;
+  return user;
 }
 
 export function currentUser(response: Response): UserDocument {
@@ -58,16 +71,13 @@ export function currentUser(response: Response): UserDocument {
 }
 
 export function userView(user: UserDocument) {
-  return {
-    id: user._id.toHexString(),
-    username: user.username,
-    lastRoomId: user.lastRoomId?.toHexString() ?? null,
-    createdAt: user.createdAt.toISOString(),
-  };
+  const profile = toUser(user);
+  return { ...profile, createdAt: profile.createdAt.toISOString() };
 }
 
-export function createIdentity(database: Database) {
+export function createIdentity(database: Database, revokeLiveSession: (hash: string) => void = () => {}) {
   const router = Router();
+  const identities = createIdentityRepository(database);
   const profileService = createProfileService(createProfileRepository(database), createRoomRepository(database));
 
   const secureCookies = z.enum(["true", "false"]).parse(
@@ -95,15 +105,55 @@ export function createIdentity(database: Database) {
 
     const origin = request.get("Origin");
 
-    if (origin && !allowedOrigins.has(origin)) {
+    if ((origin && !allowedOrigins.has(origin)) || request.get("Sec-Fetch-Site") === "cross-site") {
       response.status(403).json({
         error: "Origin not allowed",
       });
       return;
     }
 
+    // A custom header makes cross-site mutations require a CORS preflight, which
+    // this same-origin API does not allow. Apply it to login and logout as well.
+    if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && request.get("X-Wolfchatter-Request") !== "1") {
+      response.status(403).json({ error: "Missing request protection header" });
+      return;
+    }
+
     next();
   });
+
+  const cookieOptions = { httpOnly: true, sameSite: "lax" as const, secure: secureCookies, path: "/" };
+
+  async function revoke(cookie: string | undefined) {
+    const hash = sessionHash(cookie);
+    if (!hash) return;
+    await identities.deleteSession(hash);
+    revokeLiveSession(hash);
+  }
+
+  async function issue(cookie: string | undefined, userId: ObjectId, authenticated: boolean, response: Response) {
+    const now = new Date(), token = randomBytes(32).toString("base64url");
+    await identities.insertSession({
+      _id: hashToken(token), userId, authenticated, createdAt: now,
+      expiresAt: new Date(now.getTime() + SESSION_DURATION_MS),
+    });
+    await revoke(cookie);
+    response.cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: SESSION_DURATION_MS });
+  }
+
+  router.use("/auth", createAuthRoutes(createAuthController(createAuthService(createAuthRepository(database)), {
+    async user(cookie) {
+      const user = await findSessionUser(database, cookie);
+      return user ? toUser(user) : null;
+    },
+
+    replace: (cookie, userId, response) => issue(cookie, new ObjectId(userId), true, response),
+
+    async logout(cookie, response) {
+      await revoke(cookie);
+      response.clearCookie(COOKIE_NAME, cookieOptions);
+    },
+  })));
 
   const bootstrapLimiter = rateLimit({
     windowMs: 60_000,
@@ -123,7 +173,6 @@ export function createIdentity(database: Database) {
 
     if (!user) {
       const now = new Date();
-      const token = randomBytes(32).toString("base64url");
 
       const newUser: UserDocument = {
         _id: new ObjectId(),
@@ -132,22 +181,8 @@ export function createIdentity(database: Database) {
         createdAt: now,
       };
 
-      await createIdentityRepository(database).insertUser(newUser);
-
-      await createIdentityRepository(database).insertSession({
-        _id: hashToken(token),
-        userId: newUser._id,
-        createdAt: now,
-        expiresAt: new Date(now.getTime() + SESSION_DURATION_MS),
-      });
-
-      response.cookie(COOKIE_NAME, token, {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: secureCookies,
-        path: "/",
-        maxAge: SESSION_DURATION_MS,
-      });
+      await identities.insertUser(newUser);
+      await issue(request.headers.cookie, newUser._id, false, response);
 
       user = newUser;
     }
@@ -188,6 +223,10 @@ export function createIdentity(database: Database) {
   router.patch("/me", profileLimiter, async (request, response) => {
     const user = currentUser(response);
     const input = profileSchema.parse(request.body);
+    if (input.username !== undefined && !user.passwordHash) {
+      response.status(403).json({ error: "Create an account before choosing a username." });
+      return;
+    }
 
     const updated = await profileService.update({ id: user._id.toHexString(), username: user.username }, input);
 

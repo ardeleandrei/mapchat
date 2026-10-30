@@ -10,8 +10,11 @@ export async function api<T>(path: string, method = "GET", body?: unknown): Prom
   try {
     const response = await fetch("/api" + path, {
       method, credentials: "same-origin", signal: controller.signal,
-      headers: body === undefined ? { Accept: "application/json" } :
-        { Accept: "application/json", "Content-Type": "application/json" },
+      headers: {
+        Accept: "application/json",
+        ...(method === "GET" ? {} : { "X-Wolfchatter-Request": "1" }),
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     const data = await response.json();

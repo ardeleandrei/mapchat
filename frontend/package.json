@@ -10,6 +10,7 @@
     "test": "node --test test/frontend.test.mjs"
   },
   "dependencies": {
+    "@vueuse/core": "^15.0.0",
     "leaflet": "^1.9.4",
     "leaflet.markercluster": "^1.5.3",
     "pinia": "^4.1.0",

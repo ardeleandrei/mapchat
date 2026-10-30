@@ -5,13 +5,14 @@ import { createRoomRepository } from "./repositories/rooms.repository.js";
 import { z } from "zod";
 import type { Database } from "./db.js";
 import type { roomView, messageView } from "./helpers/responseMappers.js";
-import { findSessionUser } from "./identity.js";
+import { findSessionUser, sessionHash } from "./identity.js";
 
 export type LiveEvent =
   | { type: "room.created"; room: ReturnType<typeof roomView> }
   | { type: "room.updated"; room: ReturnType<typeof roomView> }
   | { type: "room.deleted"; roomId: string }
-  | { type: "message.created"; message: ReturnType<typeof messageView> };
+  | { type: "message.created"; message: ReturnType<typeof messageView>; roomOwnerId?: string }
+  | { type: "room.read"; roomId: string; userId: string };
 export type PublishEvent = (event: LiveEvent) => void;
 
 const commandSchema = z.discriminatedUnion("type", [
@@ -205,14 +206,25 @@ export function attachRealtime(
     if (event.type === "message.created" && deletedRooms.has(event.message.roomId)) return;
     if ((event.type === "room.created" || event.type === "room.updated") && deletedRooms.has(event.room.id)) return;
     for (const peer of peers.values()) {
+      if (event.type === "room.read" && peer.userId !== event.userId) continue;
       if (event.type === "room.deleted") {
         peer.roomIds.delete(event.roomId);
         if (peer.roomId === event.roomId) peer.roomId = null;
       }
-      if (event.type !== "message.created" || peer.roomIds.has(event.message.roomId))
+      if (event.type !== "message.created" || peer.roomIds.has(event.message.roomId) || event.roomOwnerId === peer.userId)
         send(peer, event);
     }
   };
+
+  function revokeSession(hash: string) {
+    for (const peer of peers.values()) {
+      if (sessionHash(peer.cookie) === hash) {
+        peer.revision++;
+        peer.roomIds.clear();
+        peer.socket.close(4401, "Session changed; reconnect with your current account");
+      }
+    }
+  }
 
   async function close() {
     if (closing) return;
@@ -228,6 +240,6 @@ export function attachRealtime(
     clearTimeout(force);
   }
 
-  return { publish, close };
+  return { publish, close, revokeSession };
 }
 

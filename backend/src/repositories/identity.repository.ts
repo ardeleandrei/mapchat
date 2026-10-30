@@ -9,4 +9,6 @@ export function createIdentityRepository(database: Database) { return {
   insertUser: (user: UserDocument) => database.users.insertOne(user),
 
   insertSession: (session: SessionDocument) => database.sessions.insertOne(session),
+
+  deleteSession: (hash: string) => database.sessions.deleteOne({ _id: hash }),
 }; }

@@ -21,13 +21,14 @@ export const liveSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("room.created"), room: roomSchema }),
   z.object({ type: z.literal("room.updated"), room: roomSchema }),
   z.object({ type: z.literal("room.deleted"), roomId: id }),
+  z.object({ type: z.literal("room.read"), roomId: id, userId: id }),
   z.object({ type: z.literal("message.created"), message: messageSchema }),
   z.object({ type: z.literal("error"), message: z.string(), requestId: z.string().uuid().optional() }),
 ]);
 export type Room = z.infer<typeof roomSchema>;
 export type Message = z.infer<typeof messageSchema>;
 export type LiveEvent = z.infer<typeof liveSchema>;
-export interface User { id: string; username: string; lastRoomId: string | null; createdAt: string }
+export interface User { id: string; username: string; lastRoomId: string | null; createdAt: string; registered: boolean }
 export interface HistoryPage {
   messages: Message[]; nextCursor: string | null; latestCursor: string | null;
   direction: "older" | "newer";

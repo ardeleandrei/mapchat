@@ -23,6 +23,11 @@ export function createMessageRepository(database: Database): MessageRepository {
     return rows.map(toMessage);
   }
   return {
+    async findById(roomId, id) {
+      const row = await database.messages.findOne({ _id: new ObjectId(id), roomId: new ObjectId(roomId) });
+      return row ? toMessage(row) : null;
+    },
+
     async findRequest(roomId, clientMessageId) {
       const row = await database.messages.findOne({ roomId: new ObjectId(roomId), clientMessageId });
       return row ? toMessage(row) : null;

@@ -1,6 +1,6 @@
 import type { Actor } from "../types/user.types.js";
 import type { Message } from "../types/message.types.js";
-import type { MessageRepository, RoomRepository } from "../types/repository.types.js";
+import type { MessageRepository, RoomRepository, ProfileRepository } from "../types/repository.types.js";
 import { DuplicateKeyError } from "../errors/DuplicateKeyError.js";
 import { RoomUnavailableError } from "../errors/RoomUnavailableError.js";
 import { encodeCursor, decodeCursor } from "../helpers/messageCursor.js";
@@ -12,7 +12,8 @@ import { createMessageSchema, historySchema } from "../schemas/api.schemas.js";
 import { requireRoom } from "./rooms.service.js";
 import { httpResult } from "../helpers/httpResult.js";
 
-export function createMessageService(messages: MessageRepository, rooms: RoomRepository, publish: PublishEvent) {
+export function createMessageService(messages: MessageRepository, rooms: RoomRepository, publish: PublishEvent,
+  profiles: Pick<ProfileRepository, "ownsUsername">) {
   const notify: PublishEvent = event => {
     try { publish(event); } catch { console.error("Live delivery failed; saved data remains available through history."); }
   };
@@ -80,6 +81,9 @@ export function createMessageService(messages: MessageRepository, rooms: RoomRep
         "Set a display name with PATCH /api/me before sending messages",
       );
     }
+    if (!await profiles.ownsUsername(user.id, user.username)) {
+      throw new HttpError(409, "This username is already taken. Choose a different username before sending.");
+    }
 
     const replyWithExisting = (message: Message) => {
       if (
@@ -126,7 +130,7 @@ export function createMessageService(messages: MessageRepository, rooms: RoomRep
       return replyWithExisting(replay);
     }
 
-    notify({ type: "message.created", message: messageView(message) });
+    notify({ type: "message.created", message: messageView(message), ...(room.createdBy ? { roomOwnerId: room.createdBy } : {}) });
     return httpResult(201, {
       message: messageView(message),
     });

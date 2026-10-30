@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createServer } from "vite";
-import { createPinia, setActivePinia } from "pinia";
+import { createPinia, setActivePinia, getActivePinia } from "pinia";
+import { createSSRApp } from "vue";
+import { renderToString } from "vue/server-renderer";
 
 test("Frontend API and WebSocket state", async t => {
   const vite = await createServer({ server: { middlewareMode: true, hmr: false } });
@@ -21,9 +23,11 @@ test("Frontend API and WebSocket state", async t => {
     location: { type: "Point", coordinates: [15, 48] }, createdAt: "2026-10-29T10:00:00.000Z" };
   const room2 = { ...room1, id: "100000000000000000000002", title: "Chatroom 2" };
   const profile = { id: "200000000000000000000001", username: "Tester", lastRoomId: null,
-    createdAt: room1.createdAt };
+    createdAt: room1.createdAt, registered: true };
   const records = [], posts = [], calls = [];
-  let failAfterSave = false, nextNumber = 0;
+  const accounts = new Map();
+  const ownedRooms = [], readMarkers = new Map();
+  let failAfterSave = false, failBootstrap = false, nextNumber = 0;
 
   function makeMessage(roomId, text, clientMessageId = crypto.randomUUID()) {
     const number = ++nextNumber;
@@ -68,7 +72,7 @@ test("Frontend API and WebSocket state", async t => {
   globalThis.WebSocket = Socket;
 
   function publish(message) {
-    for (const socket of sockets) if (socket.readyState === 1 && socket.roomIds.includes(message.roomId))
+    for (const socket of sockets) if (socket.readyState === 1 && (socket.roomIds.includes(message.roomId) || ownedRooms.some(room => room.id === message.roomId && room.createdBy === profile.id)))
       socket.receive({ type: "message.created", message });
   }
 
@@ -79,12 +83,40 @@ test("Frontend API and WebSocket state", async t => {
     const url = new URL(path, globalThis.location), method = options.method ?? "GET";
     const body = options.body ? JSON.parse(options.body) : null;
     calls.push({ path: url.pathname, method });
+    if (url.pathname === "/api/me/rooms") return response({ rooms: ownedRooms.filter(room => room.createdBy === profile.id), nextCursor: null });
+    if (url.pathname === "/api/me/unread") return response({ rooms: url.searchParams.get("roomIds").split(",").map(roomId => ({
+      roomId, unreadCount: Math.min(100, records.filter(message => message.roomId === roomId && message.userId !== profile.id &&
+        message.id > (readMarkers.get(profile.id + roomId) ?? "")).length),
+    })) });
+    if (/^\/api\/rooms\/[^/]+\/read$/.test(url.pathname)) {
+      const roomId = url.pathname.split("/")[3], key = profile.id + roomId;
+      if (body.messageId > (readMarkers.get(key) ?? "")) readMarkers.set(key, body.messageId);
+      return response({ roomId });
+    }
+    if (url.pathname === "/api/auth/logout") {
+      accounts.set(profile.username, { ...profile });
+      Object.assign(profile, { id: "200000000000000000000002", username: "", registered: false, lastRoomId: null });
+      return response({ ok: true });
+    }
+    if (url.pathname === "/api/auth/login") {
+      const account = accounts.get(body.username);
+      if (!account || body.password !== "correct test passphrase") return response({ error: "Invalid username or password." }, 401);
+      Object.assign(profile, account);
+      return response({ user: { ...profile } });
+    }
+    if (url.pathname === "/api/auth/register") {
+      if (body.username === "Taken") return response({ error: "Username is already taken." }, 409);
+      Object.assign(profile, { username: body.username, registered: true });
+      return response({ user: { ...profile } }, 201);
+    }
     if (url.pathname === "/api/me") {
+      if (method === "GET" && failBootstrap) { failBootstrap = false; return response({ error: "Session bootstrap unavailable" }, 503); }
+      if (method === "PATCH" && body?.username === "Taken") return response({ error: "Username is already taken. Choose another name." }, 409);
       if (method === "PATCH") Object.assign(profile, body);
       return response({ user: { ...profile } });
     }
-    if (url.pathname === "/api/rooms") return response({ rooms: [room1, room2], truncated: false });
-    const room = [room1, room2].find(item => url.pathname === "/api/rooms/" + item.id);
+    if (url.pathname === "/api/rooms") return response({ rooms: [room1, room2, ...ownedRooms], truncated: false });
+    const room = [room1, room2, ...ownedRooms].find(item => url.pathname === "/api/rooms/" + item.id);
     if (room) return method === "DELETE" ? response({ roomId: room.id }) : response({ room });
     const parts = url.pathname.split("/");
     assert.ok(parts.length === 5 && parts[2] === "rooms" && parts[4] === "messages", "Unexpected API request " + url);
@@ -126,15 +158,41 @@ test("Frontend API and WebSocket state", async t => {
     assert.equal(profile.lastRoomId, room1.id);
     assert.equal(chat.currentHistory.items.length, 0);
   });
+  await t.test("a taken username leaves the saved profile and message draft intact", async () => {
+    chat.drafts[room1.id] = "Keep this draft";
+    await assert.rejects(chat.saveName("Taken"), /already taken/);
+    assert.equal(posts.length, 0);
+    assert.equal(chat.user.username, "Tester");
+    assert.equal(chat.drafts[room1.id], "Keep this draft");
+  });
   await t.test("merges a saved HTTP response and its WebSocket echo once", async () => {
-    assert.equal(await chat.send(room1.id, "Tester", "First message"), true);
+    const profileWrites = calls.filter(call => call.path === "/api/me" && call.method === "PATCH").length;
+    assert.equal(await chat.send(room1.id, "First message"), true);
+    assert.equal(calls.filter(call => call.path === "/api/me" && call.method === "PATCH").length, profileWrites);
     assert.equal(chat.currentHistory.items.length, 1);
     assert.equal(chat.currentHistory.items[0].text, "First message");
   });
+  await t.test("profile edits keep the user ID and affect future messages without rewriting old authors", async () => {
+    const id = chat.user.id;
+    await chat.saveName("Renamed Tester");
+    assert.equal(chat.user.id, id);
+    assert.equal(profile.username, "Renamed Tester");
+    assert.equal(await chat.send(room1.id, "After profile edit"), true);
+    assert.equal(chat.history(room1.id).items.find(message => message.text === "First message").username, "Tester");
+    assert.equal(chat.history(room1.id).items.find(message => message.text === "After profile edit").username, "Renamed Tester");
+  });
+  await t.test("a visitor without a saved username cannot send", async () => {
+    const name = chat.user.username, before = posts.length;
+    chat.user.username = "";
+    assert.equal(await chat.send(room1.id, "Needs a username"), false);
+    assert.equal(posts.length, before);
+    assert.match(chat.history(room1.id).error, /profile/);
+    chat.user.username = name;
+  });
   await t.test("retries an uncertain write with the original request ID", async () => {
     failAfterSave = true;
-    assert.equal(await chat.send(room1.id, "Tester", "Retry safely"), false);
-    assert.equal(await chat.send(room1.id, "Tester", "Retry safely"), true);
+    assert.equal(await chat.send(room1.id, "Retry safely"), false);
+    assert.equal(await chat.send(room1.id, "Retry safely"), true);
     assert.equal(posts.at(-1).clientMessageId, posts.at(-2).clientMessageId);
     assert.equal(chat.currentHistory.items.filter(message => message.text === "Retry safely").length, 1);
   });
@@ -193,6 +251,116 @@ test("Frontend API and WebSocket state", async t => {
     assert.ok(chat.history(room1.id).items.length > 100);
     await chat.selectRoom(room1); await chat.selectRoom(room1);
     assert.equal(chat.windows.length, 1);
+  });
+  await t.test("all created rooms appear in the sidebar without consuming the open-window limit", async () => {
+    for (let i = 0; i < 25; i++) ownedRooms.push({ ...room1, id: (3000 + i).toString(16).padStart(24, "0"),
+      title: "Owned " + i, createdBy: profile.id, location: { type: "Point", coordinates: [150, -30] } });
+    await chat.refreshSidebar();
+    assert.equal(chat.sidebarRooms.length, 25);
+    assert.equal(chat.windows.length, 1);
+    await chat.selectRoom(ownedRooms[0]);
+    assert.ok(chat.sidebarRooms.some(room => room.id === ownedRooms[0].id), "opening a created chat keeps its sidebar entry");
+    chat.closeRoom(ownedRooms[0].id);
+    assert.ok(chat.sidebarRooms.some(room => room.id === ownedRooms[0].id), "closing the window keeps its sidebar entry");
+    assert.equal(chat.windows.some(entry => entry.id === ownedRooms[0].id), false);
+  });
+  function incoming(room, text) {
+    const message = { ...makeMessage(room.id, text), userId: "200000000000000000000099", username: "Other visitor" };
+    records.push(message); publish(message);
+    return message;
+  }
+  await t.test("unread counts are per room, exclude own messages, and clear on opening", async () => {
+    const first = ownedRooms[0], second = ownedRooms[1];
+    incoming(first, "First unread"); incoming(first, "Second unread"); incoming(second, "Other room unread");
+    const own = makeMessage(first.id, "Own message"); records.push(own); publish(own);
+    await until(() => chat.unreadCounts[first.id] === 2 && chat.unreadCounts[second.id] === 1);
+    await chat.selectRoom(first);
+    await until(() => chat.unreadCounts[first.id] === 0);
+    assert.equal(chat.unreadCounts[second.id], 1);
+    chat.minimizeRoom(first.id);
+    const saved = incoming(first, "Arrived while minimized"); publish(saved);
+    await until(() => chat.unreadCounts[first.id] === 1);
+    assert.ok(chat.sidebarRooms.some(room => room.id === first.id));
+    await chat.selectRoom(first); await until(() => chat.unreadCounts[first.id] === 0);
+  });
+  await t.test("badges show 99+ and unread counts survive a fresh frontend session", async () => {
+    const first = ownedRooms[0];
+    chat.minimizeRoom(first.id);
+    for (let i = 0; i < 105; i++) incoming(first, "Unread burst " + i);
+    await until(() => chat.unreadCounts[first.id] === 100);
+    const { default: Sidebar } = await vite.ssrLoadModule("/src/components/chat/MinimizedChats.vue");
+    assert.match(await renderToString(createSSRApp(Sidebar).use(getActivePinia())), />99\+<\/span>/);
+    chat.stop(); setActivePinia(createPinia()); chat = useChat();
+    await chat.start(); await until(() => chat.connection === "online");
+    assert.equal(chat.sidebarRooms.length, 25);
+    assert.equal(chat.windows.length, 0, "the last owned room is restored minimized");
+    assert.equal(chat.unreadCounts[first.id], 100);
+    await chat.selectRoom(first); await until(() => chat.unreadCounts[first.id] === 0);
+    ownedRooms.length = 0; await chat.refreshSidebar();
+    await chat.selectRoom(room1);
+  });
+  await t.test("invalid login does not expire the existing session or discard drafts", async () => {
+    const id = chat.user.id;
+    chat.drafts[room1.id] = "Keep during failed sign-in";
+    await assert.rejects(chat.authenticate("login", "Missing", "wrong password"), /Invalid username or password/);
+    assert.equal(chat.user.id, id);
+    assert.equal(chat.ready, true);
+    assert.equal(chat.authBusy, false);
+    assert.equal(chat.drafts[room1.id], "Keep during failed sign-in");
+  });
+  await t.test("logout clears identity-specific state and login restores the account's room", async () => {
+    const account = { ...chat.user }, oldSocket = sockets.at(-1);
+    await chat.logout();
+    assert.notEqual(chat.user.id, account.id);
+    assert.equal(chat.user.registered, false);
+    assert.equal(chat.windows.length, 0);
+    assert.equal(chat.drafts[room1.id], undefined);
+    assert.equal(chat.history(room1.id).items.length, 0);
+    assert.equal(await chat.send(room1.id, "Guest cannot send"), false);
+    chat.requestRoom(15, 48);
+    assert.equal(chat.authOpen, true); assert.equal(chat.newRoomLocation, null);
+    await chat.authenticate("login", account.username, "correct test passphrase");
+    await until(() => chat.connection === "online" && chat.history(room1.id).loaded);
+    assert.equal(chat.user.id, account.id);
+    assert.equal(chat.user.registered, true);
+    assert.equal(chat.selectedRoomId, account.lastRoomId);
+    assert.equal(chat.authOpen, false);
+    const stale = makeMessage(room1.id, "Old socket must be ignored");
+    oldSocket.receive({ type: "message.created", message: stale });
+    assert.equal(chat.history(room1.id).items.some(message => message.id === stale.id), false);
+  });
+  await t.test("registration preserves a guest's open chat and failed registration keeps its draft", async () => {
+    const account = { ...chat.user };
+    await chat.logout();
+    await chat.selectRoom(room1);
+    const guestId = chat.user.id;
+    chat.drafts[room1.id] = "Guest draft";
+    await assert.rejects(chat.authenticate("register", "Taken", "correct test passphrase"), /already taken/);
+    assert.equal(chat.user.registered, false);
+    assert.equal(chat.drafts[room1.id], "Guest draft");
+    await chat.authenticate("register", "New account", "correct test passphrase");
+    assert.equal(chat.user.id, guestId);
+    assert.equal(chat.user.registered, true);
+    assert.equal(chat.drafts[room1.id], "Guest draft");
+    assert.equal(chat.windows.length, 1);
+    await chat.authenticate("login", account.username, "correct test passphrase");
+    await until(() => chat.connection === "online");
+    assert.equal(chat.user.id, account.id);
+    assert.equal(chat.drafts[room1.id], undefined);
+  });
+  await t.test("logout still clears the account and drafts if guest bootstrap fails", async () => {
+    const account = { ...chat.user };
+    chat.drafts[room1.id] = "Private unsent draft";
+    failBootstrap = true;
+    await chat.logout();
+    assert.equal(chat.user, null);
+    assert.equal(chat.ready, false);
+    assert.equal(chat.windows.length, 0);
+    assert.equal(chat.drafts[room1.id], undefined);
+    assert.match(chat.error, /bootstrap unavailable/);
+    await chat.start();
+    await chat.authenticate("login", account.username, "correct test passphrase");
+    await until(() => chat.connection === "online");
   });
   await t.test("room deletion clears minimized windows/drafts and ignores stale room updates", async () => {
     await chat.selectRoom(room2);

@@ -13,7 +13,7 @@ const server = createServer(app);
 const live = attachRealtime(server, database);
 const port = Number(process.env.PORT ?? 3000);
 
-configureApp(app, database, live.publish);
+configureApp(app, database, live.publish, live.revokeSession);
 
 server.listen(port, "0.0.0.0", () => {
   console.log("Wolfchatter listening on port " + port);

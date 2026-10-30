@@ -21,6 +21,7 @@ export function createRoomRepository(database: Database): RoomRepository { retur
       { $set: { deletedAt: new Date() } });
     if (!result.matchedCount) return false;
     await database.messages.deleteMany({ roomId });
+    await database.roomReads.deleteMany({ roomId });
     await database.users.updateMany({ lastRoomId: roomId }, { $set: { lastRoomId: null } });
     return true;
   },
@@ -65,6 +66,14 @@ export function createRoomRepository(database: Database): RoomRepository { retur
       .limit(query.limit + 1)
       .toArray();
     return rooms.map(toRoom);
+  },
+
+  async listOwned(userId, after, limit) {
+    const rows = await database.rooms.find({
+      createdBy: new ObjectId(userId), deletedAt: { $exists: false },
+      ...(after ? { _id: { $gt: new ObjectId(after) } } : {}),
+    }).sort({ _id: 1 }).limit(limit + 1).toArray();
+    return rows.map(toRoom);
   },
 
   async nearby(query) {

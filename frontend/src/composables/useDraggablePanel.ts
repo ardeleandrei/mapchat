@@ -1,40 +1,39 @@
-import { computed, onMounted, onUnmounted, ref, type CSSProperties, type Ref } from "vue";
+import { computed, onMounted, ref, type CSSProperties, type Ref } from "vue";
+import { useDraggable, useResizeObserver } from "@vueuse/core";
 
 export function useDraggablePanel(panel: Ref<HTMLElement | null>, slot = 0) {
-  const position = ref<{ x: number; y: number } | null>(null);
-  const dragging = ref(false);
-  let grab: { id: number; x: number; y: number } | null = null;
-  let observer: ResizeObserver | undefined;
+  const handle = ref<HTMLElement | null>(null);
+  const positioned = ref(false);
+  const parent = computed(() => panel.value?.parentElement);
+  const { position, isDragging: dragging } = useDraggable(panel, {
+    handle,
+    containerElement: parent,
+    preventDefault: true,
+    onStart: (_position, event) => {
+      if (!event.isPrimary || (event.target as HTMLElement).closest("button")) return false;
+      handle.value?.setPointerCapture(event.pointerId);
+    },
 
-  function move(x: number, y: number) {
+    onMove: ({ x, y }) => move(x, y),
+
+    onEnd: (_position, event) => {
+      if (handle.value?.hasPointerCapture(event.pointerId)) handle.value.releasePointerCapture(event.pointerId);
+    },
+  });
+
+  function move(x: number, y: number, width?: number, height?: number) {
     const node = panel.value, parent = node?.parentElement;
-    if (!node || !parent) return;
+    if (!node || !parent || !parent.clientWidth || !parent.clientHeight) return;
     position.value = {
-      x: Math.max(8, Math.min(x, parent.clientWidth - node.offsetWidth - 8)),
-      y: Math.max(8, Math.min(y, parent.clientHeight - node.offsetHeight - 8)),
+      x: Math.max(8, Math.min(x, parent.clientWidth - (width ?? node.offsetWidth) - 8)),
+      y: Math.max(8, Math.min(y, parent.clientHeight - (height ?? node.offsetHeight) - 8)),
     };
+    positioned.value = true;
   }
 
-  function pointerDown(event: PointerEvent) {
-    if (event.button !== 0 || !event.isPrimary || (event.target as HTMLElement).closest("button")) return;
+  function anchor() {
     const node = panel.value;
-    if (!node) return;
-    const rect = node.getBoundingClientRect();
-    grab = { id: event.pointerId, x: event.clientX - rect.left, y: event.clientY - rect.top };
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    dragging.value = true;
-    event.preventDefault();
-  }
-
-  function pointerMove(event: PointerEvent) {
-    if (!grab || grab.id !== event.pointerId) return;
-    const parent = panel.value?.parentElement?.getBoundingClientRect();
-    if (parent) move(event.clientX - parent.left - grab.x, event.clientY - parent.top - grab.y);
-  }
-
-  function pointerEnd(event: PointerEvent) {
-    if (grab?.id !== event.pointerId) return;
-    grab = null; dragging.value = false;
+    if (node) move(node.offsetLeft, node.offsetTop);
   }
 
   function keyMove(event: KeyboardEvent) {
@@ -48,6 +47,7 @@ export function useDraggablePanel(panel: Ref<HTMLElement | null>, slot = 0) {
     const step = event.shiftKey ? 30 : 10;
     move(node.offsetLeft + delta[0] * step, node.offsetTop + delta[1] * step);
   }
+
   onMounted(() => {
     const node = panel.value;
     if (node?.parentElement && slot > 0) {
@@ -55,14 +55,12 @@ export function useDraggablePanel(panel: Ref<HTMLElement | null>, slot = 0) {
       const column = slot % columns, row = Math.floor(slot / columns) % 6;
       move(node.offsetLeft - column * (node.offsetWidth + 16) - row * 20, node.offsetTop + row * 36);
     }
-    observer = new ResizeObserver(() => { if (position.value) move(position.value.x, position.value.y); });
-    if (panel.value) {
-      observer.observe(panel.value);
-      if (panel.value.parentElement) observer.observe(panel.value.parentElement);
-    }
   });
-  onUnmounted(() => observer?.disconnect());
-  const style = computed<CSSProperties>(() => position.value
+
+  useResizeObserver(() => [panel.value, parent.value], () => {
+    if (positioned.value) move(position.value.x, position.value.y);
+  });
+  const style = computed<CSSProperties>(() => positioned.value
     ? { left: position.value.x + "px", top: position.value.y + "px", right: "auto" } : {});
-  return { style, dragging, pointerDown, pointerMove, pointerEnd, keyMove };
+  return { handle, style, dragging, anchor, move, keyMove };
 }
