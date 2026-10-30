@@ -81,6 +81,9 @@ try {
   assert.equal(page.rooms.length, 2); assert.ok(page.nextCursor);
   assert.equal((await owner.request("/me/rooms?after=" + page.nextCursor)).rooms.length, 23);
   assert.equal((await unrelated.request("/me/rooms")).rooms.length, 0);
+  assert.equal((await owner.request("/me/rooms/recent")).rooms[0].room.id, first);
+  assert.equal((await unrelated.request("/me/rooms/recent")).rooms.length, 0);
+  await owner.request("/me/rooms/recent?limit=0", "GET", undefined, 400);
   assert.deepEqual((await owner.request("/me/unread?roomIds=" + first + "," + second)).rooms.map(row => row.unreadCount), [100, 2]);
   assert.equal(await count(sender, first), 3, "own messages are excluded");
 
@@ -106,11 +109,30 @@ try {
   assert.equal(await count(owner, first), 0);
   await sleep(50);
   assert.equal(otherSocket.events.some(event => event.type === "room.read" || event.type === "message.created"), false);
+  const otherRoom = (await sender.request("/rooms", "POST", {
+    longitude: 100, latitude: 30, creationKey: randomUUID(), title: "Someone else's room",
+  }, 201)).room;
+  const ownPost = (await owner.request("/rooms/" + otherRoom.id + "/messages", "POST", {
+    text: "My recent chat in another user's room", clientMessageId: randomUUID(),
+  }, 201)).message;
+  await ownerSocket.wait(event => event.message?.id === ownPost.id);
+  const recent = (await owner.request("/me/rooms/recent")).rooms;
+  assert.deepEqual(recent.map(row => row.room.id), [otherRoom.id, first]);
+  assert.equal(recent[0].room.createdBy, sender.userId.toHexString());
+  const restoredSocket = await socketFor(anotherSession);
+  const reply = (await sender.request("/rooms/" + otherRoom.id + "/messages", "POST", {
+    text: "Reply while the recent chat has no open window", clientMessageId: randomUUID(),
+  }, 201)).message;
+  await ownerSocket.wait(event => event.message?.id === reply.id);
+  await restoredSocket.wait(event => event.message?.id === reply.id);
+  assert.equal(await count(owner, otherRoom.id), 1);
   await unrelated.request("/rooms/" + first + "/read", "POST", { messageId: saved.id });
   await owner.request("/rooms/" + first, "DELETE");
   assert.equal(await database.roomReads.countDocuments({ roomId: rooms[0]._id }), 0);
   assert.equal((await owner.request("/me/rooms")).rooms.length, 24);
+  assert.equal((await owner.request("/me/rooms/recent")).rooms.some(row => row.room.id === first), false);
   console.log("PASS: owned-room pagination, per-chat unread counts, 99+ cap, own-message exclusion, monotonic reads, session persistence, creator live delivery, private read events, retry safety and deletion cleanup.");
+  console.log("PASS: recent chats include owned/other rooms, follow the user's message order, exclude deleted rooms, and receive live replies across sessions without open windows.");
 } finally {
   for (const socket of sockets) socket.terminate();
   await live.close(); await new Promise(resolve => server.close(resolve));

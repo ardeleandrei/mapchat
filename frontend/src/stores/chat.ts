@@ -21,6 +21,9 @@ export const useChat = defineStore("chat", () => {
   const session = useSession(), layout = useWindows(), unread = useUnread();
   const { counts: unreadCounts, error: unreadError } = storeToRefs(unread);
   const ownedRoomIds = ref(new Set<string>());
+  const recentActivity = ref<Record<string, { createdAt: string; id: string }>>({});
+  const recentVersions = new Map<string, number>();
+  let recentVersion = 0;
   const sidebarError = ref("");
   let sidebarRequest = 0;
   const { user, ready, starting, savingName, authBusy, authOpen } = storeToRefs(session);
@@ -33,10 +36,18 @@ export const useChat = defineStore("chat", () => {
     const room = rooms.value.find(item => item.id === entry.id);
     return room ? [{ entry, room }] : [];
   }));
-  const sidebarRooms = computed(() => rooms.value.filter(room => {
-    const entry = windows.value.find(item => item.id === room.id);
-    return ownedRoomIds.value.has(room.id) || Boolean(entry?.minimized);
-  }));
+  const myChatrooms = computed(() => rooms.value.filter(room => ownedRoomIds.value.has(room.id))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)));
+  const recentChatrooms = computed(() => {
+    const ids = orderedRecentIds();
+    // Keep manually minimized windows accessible until closed, including rooms
+    // the visitor has only read. Saved recent activity comes from sent messages.
+    for (const entry of [...windows.value].sort((a, b) => b.order - a.order)) {
+      if (entry.minimized && !ownedRoomIds.value.has(entry.id) && !ids.includes(entry.id)) ids.push(entry.id);
+    }
+    return ids.flatMap(id => { const room = rooms.value.find(item => item.id === id); return room ? [room] : []; });
+  });
+  const sidebarRooms = computed(() => [...new Map([...myChatrooms.value, ...recentChatrooms.value].map(room => [room.id, room])).values()]);
   const creating = ref(false);
   const error = ref(""), mapError = ref(""), truncated = ref(false);
   const connection = ref<Connection>("offline"), liveError = ref("");
@@ -88,24 +99,58 @@ export const useChat = defineStore("chat", () => {
     if (latest) void unread.mark(id, latest.id);
   }
 
+  function orderedRecentIds() {
+    return Object.keys(recentActivity.value).sort((a, b) => {
+      const first = recentActivity.value[a]!, second = recentActivity.value[b]!;
+      return second.createdAt.localeCompare(first.createdAt) || second.id.localeCompare(first.id);
+    }).slice(0, 20);
+  }
+
+  function rememberRecent(message: Message) {
+    if (!user.value?.registered || message.userId !== user.value.id || deletedRooms.has(message.roomId)) return;
+    const existing = recentActivity.value[message.roomId];
+    if (existing && (existing.createdAt > message.createdAt || (existing.createdAt === message.createdAt && existing.id >= message.id))) return;
+    recentActivity.value[message.roomId] = { createdAt: message.createdAt, id: message.id };
+    recentVersions.set(message.roomId, ++recentVersion);
+    const keep = new Set(orderedRecentIds());
+    for (const id of Object.keys(recentActivity.value)) if (!keep.has(id)) {
+      delete recentActivity.value[id]; recentVersions.delete(id);
+    }
+  }
+
   async function refreshSidebar() {
     if (!ready.value || !user.value?.registered) return;
-    const identity = identityVersion, request = ++sidebarRequest, startedVersion = roomVersion;
+    const identity = identityVersion, request = ++sidebarRequest, startedVersion = roomVersion, startedRecentVersion = recentVersion;
     try {
-      const collected: Room[] = [];
-      let after: string | undefined;
-      do {
-        const page = await roomsService.mine(after);
-        if (identity !== identityVersion || request !== sidebarRequest) return;
-        collected.push(...page.rooms); after = page.nextCursor ?? undefined;
-      } while (after);
+      const collectOwned = async () => {
+        const collected: Room[] = [];
+        let after: string | undefined;
+        do {
+          const page = await roomsService.mine(after);
+          if (identity !== identityVersion || request !== sidebarRequest) return collected;
+          collected.push(...page.rooms); after = page.nextCursor ?? undefined;
+        } while (after);
+        return collected;
+      };
+      const [collected, recent] = await Promise.all([collectOwned(), roomsService.recent()]);
+      if (identity !== identityVersion || request !== sidebarRequest) return;
       const ids = new Set(collected.map(room => room.id));
       for (const id of ownedRoomIds.value) {
         if (!ids.has(id) && (roomVersions.get(id) ?? 0) <= startedVersion) forgetRoom(id);
       }
       for (const room of collected) upsert(room);
+      const activity: typeof recentActivity.value = {};
+      for (const row of recent.rooms) {
+        if (deletedRooms.has(row.room.id)) continue;
+        upsert(row.room);
+        activity[row.room.id] = { createdAt: row.lastMessageAt, id: row.lastMessageId };
+      }
+      for (const [id, value] of Object.entries(recentActivity.value)) {
+        if ((recentVersions.get(id) ?? 0) > startedRecentVersion) activity[id] = value;
+      }
+      recentActivity.value = activity;
       sidebarError.value = "";
-      await unread.refresh([...ownedRoomIds.value, ...windows.value.map(entry => entry.id)]);
+      await unread.refresh([...ownedRoomIds.value, ...orderedRecentIds(), ...windows.value.map(entry => entry.id)]);
     } catch (cause) { if (identity === identityVersion && request === sidebarRequest) sidebarError.value = report(cause); }
   }
 
@@ -134,7 +179,7 @@ export const useChat = defineStore("chat", () => {
       const result = await roomsService.list(bounds);
       if (request !== roomRequest || identity !== identityVersion) return;
       // Preserve pins delivered while the HTTP viewport request was in flight.
-      const keep = rooms.value.filter(r => ownedRoomIds.value.has(r.id) || windows.value.some(entry => entry.id === r.id) ||
+      const keep = rooms.value.filter(r => ownedRoomIds.value.has(r.id) || recentActivity.value[r.id] || windows.value.some(entry => entry.id === r.id) ||
         (visible(r) && (roomVersions.get(r.id) ?? 0) > startedVersion));
       const merged = new Map(keep.map(room => [room.id, room]));
       for (const room of result.rooms) {
@@ -276,7 +321,9 @@ export const useChat = defineStore("chat", () => {
   function forgetRoom(id: string) {
     if (deletedRooms.has(id)) return;
     deletedRooms.add(id);
+    layout.forgetPosition(id);
     ownedRoomIds.value.delete(id); unread.forget(id);
+    delete recentActivity.value[id]; recentVersions.delete(id);
     if (windows.value.some(entry => entry.id === id)) closeRoom(id);
     roomVersions.delete(id);
     rooms.value = rooms.value.filter(room => room.id !== id);
@@ -350,6 +397,7 @@ export const useChat = defineStore("chat", () => {
       pendingMessages.set(id, body);
       const result = await messagesService.send(id, body);
       if (identity !== identityVersion) return false;
+      rememberRecent(result.message);
       merge(id, [result.message]); pendingMessages.delete(id);
       return true;
     } catch (cause) { if (identity === identityVersion) history(id).error = report(cause); return false; }
@@ -358,6 +406,7 @@ export const useChat = defineStore("chat", () => {
 
   function clearUserState() {
     ownedRoomIds.value.clear(); unread.reset(); sidebarError.value = ""; sidebarRequest++;
+    recentActivity.value = {}; recentVersions.clear();
     for (const key of Object.keys(histories)) delete histories[key];
     for (const key of Object.keys(sending)) delete sending[key];
     tasks.clear(); creating.value = false; selectionVersion++;
@@ -412,10 +461,12 @@ export const useChat = defineStore("chat", () => {
           if (event.type === "room.deleted") forgetRoom(event.roomId);
           if (event.type === "room.read" && event.userId === user.value?.id) void unread.refresh([event.roomId]);
           if ((event.type === "room.created" || event.type === "room.updated") &&
-            (event.room.createdBy === user.value?.id || visible(event.room) || windows.value.some(entry => entry.id === event.room.id))) upsert(event.room);
+            (event.room.createdBy === user.value?.id || recentActivity.value[event.room.id] || visible(event.room) || windows.value.some(entry => entry.id === event.room.id))) upsert(event.room);
           if (event.type === "message.created") {
+            rememberRecent(event.message);
+            if (event.message.userId === user.value?.id && !rooms.value.some(room => room.id === event.message.roomId)) void refreshSidebar();
             if (windows.value.some(entry => entry.id === event.message.roomId)) merge(event.message.roomId, [event.message]);
-            if (user.value?.registered && (ownedRoomIds.value.has(event.message.roomId) || windows.value.some(entry => entry.id === event.message.roomId)))
+            if (user.value?.registered && (ownedRoomIds.value.has(event.message.roomId) || recentActivity.value[event.message.roomId] || windows.value.some(entry => entry.id === event.message.roomId)))
               void unread.refresh([event.message.roomId]);
           }
           if (event.type === "error") liveError.value = event.message;
@@ -462,7 +513,7 @@ export const useChat = defineStore("chat", () => {
   }
 
   function stop() { live?.stop(); connection.value = "offline"; }
-  return { user, rooms, selectedRoomId, selectedRoom, currentHistory, ready, starting, windows, openChats, sidebarRooms, unreadCounts, unreadError, sidebarError, refreshSidebar, drafts, history,
+  return { user, rooms, selectedRoomId, selectedRoom, currentHistory, ready, starting, windows, openChats, sidebarRooms, myChatrooms, recentChatrooms, unreadCounts, unreadError, sidebarError, refreshSidebar, drafts, history,
     activateRoom, minimizeRoom, closeRoom,
     creating, savingName, authBusy, authOpen, error, mapError, truncated, sending, pendingPin, newRoomLocation, connection, liveError,
     requestRoom, updateRoom, deleteRoom,

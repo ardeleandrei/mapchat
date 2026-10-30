@@ -26,6 +26,7 @@ export function createApi(database: Database, publish: PublishEvent) {
     standardHeaders: "draft-8", legacyHeaders: false, message: { error: "Too many requests. Try again shortly." } }));
   router.get("/me/messages", chatController(service, "myMessages"));
   router.get("/me/rooms", chatController(service, "myRooms"));
+  router.get("/me/rooms/recent", chatController(service, "recentRooms"));
   router.get("/me/unread", chatController(service, "unreadCounts"));
   router.post("/rooms/:roomId/read", rateLimit({ windowMs: 60_000, limit: 240,
     standardHeaders: "draft-8", legacyHeaders: false, message: { error: "Too many read updates. Try again shortly." } }), chatController(service, "markRoomRead"));

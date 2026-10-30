@@ -83,6 +83,14 @@ test("Frontend API and WebSocket state", async t => {
     const url = new URL(path, globalThis.location), method = options.method ?? "GET";
     const body = options.body ? JSON.parse(options.body) : null;
     calls.push({ path: url.pathname, method });
+    if (url.pathname === "/api/me/rooms/recent") {
+      const byRoom = new Map();
+      for (const message of records.filter(item => item.userId === profile.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))) {
+        const room = [room1, room2, ...ownedRooms].find(item => item.id === message.roomId);
+        if (room && !byRoom.has(room.id)) byRoom.set(room.id, { room, lastMessageAt: message.createdAt, lastMessageId: message.id });
+      }
+      return response({ rooms: [...byRoom.values()].slice(0, 20) });
+    }
     if (url.pathname === "/api/me/rooms") return response({ rooms: ownedRooms.filter(room => room.createdBy === profile.id), nextCursor: null });
     if (url.pathname === "/api/me/unread") return response({ rooms: url.searchParams.get("roomIds").split(",").map(roomId => ({
       roomId, unreadCount: Math.min(100, records.filter(message => message.roomId === roomId && message.userId !== profile.id &&
@@ -256,7 +264,7 @@ test("Frontend API and WebSocket state", async t => {
     for (let i = 0; i < 25; i++) ownedRooms.push({ ...room1, id: (3000 + i).toString(16).padStart(24, "0"),
       title: "Owned " + i, createdBy: profile.id, location: { type: "Point", coordinates: [150, -30] } });
     await chat.refreshSidebar();
-    assert.equal(chat.sidebarRooms.length, 25);
+    assert.equal(chat.myChatrooms.length, 25);
     assert.equal(chat.windows.length, 1);
     await chat.selectRoom(ownedRooms[0]);
     assert.ok(chat.sidebarRooms.some(room => room.id === ownedRooms[0].id), "opening a created chat keeps its sidebar entry");
@@ -283,8 +291,22 @@ test("Frontend API and WebSocket state", async t => {
     assert.ok(chat.sidebarRooms.some(room => room.id === first.id));
     await chat.selectRoom(first); await until(() => chat.unreadCounts[first.id] === 0);
   });
+  await t.test("recent chats include owned and other rooms, ordered by the user's latest message", async () => {
+    const first = ownedRooms[0];
+    assert.equal(await chat.send(first.id, "Recent message in my room"), true);
+    assert.equal(await chat.send(room1.id, "Recent message in another room"), true);
+    assert.deepEqual(chat.recentChatrooms.slice(0, 2).map(room => room.id), [room1.id, first.id]);
+    assert.ok(chat.myChatrooms.some(room => room.id === first.id));
+    chat.closeRoom(first.id);
+    assert.ok(chat.myChatrooms.some(room => room.id === first.id));
+    assert.ok(chat.recentChatrooms.some(room => room.id === first.id));
+    await chat.refreshSidebar();
+    assert.deepEqual(chat.recentChatrooms.slice(0, 2).map(room => room.id), [room1.id, first.id]);
+  });
   await t.test("badges show 99+ and unread counts survive a fresh frontend session", async () => {
     const first = ownedRooms[0];
+    await chat.selectRoom(first);
+    await until(() => chat.unreadCounts[first.id] === 0);
     chat.minimizeRoom(first.id);
     for (let i = 0; i < 105; i++) incoming(first, "Unread burst " + i);
     await until(() => chat.unreadCounts[first.id] === 100);
@@ -292,7 +314,8 @@ test("Frontend API and WebSocket state", async t => {
     assert.match(await renderToString(createSSRApp(Sidebar).use(getActivePinia())), />99\+<\/span>/);
     chat.stop(); setActivePinia(createPinia()); chat = useChat();
     await chat.start(); await until(() => chat.connection === "online");
-    assert.equal(chat.sidebarRooms.length, 25);
+    assert.equal(chat.myChatrooms.length, 25);
+    assert.ok(chat.recentChatrooms.some(room => room.id === first.id));
     assert.equal(chat.windows.length, 0, "the last owned room is restored minimized");
     assert.equal(chat.unreadCounts[first.id], 100);
     await chat.selectRoom(first); await until(() => chat.unreadCounts[first.id] === 0);
@@ -380,6 +403,7 @@ test("Frontend API and WebSocket state", async t => {
     await chat.deleteRoom(room1.id);
     await until(() => sockets.at(-1).acknowledged && sockets.at(-1).roomIds.length === 0 && profile.lastRoomId === null);
     assert.equal(chat.rooms.some(room => room.id === room1.id), false);
+    assert.equal(chat.recentChatrooms.some(room => room.id === room1.id), false);
     assert.equal(chat.windows.length, 0);
     assert.equal(chat.drafts[room1.id], undefined);
     assert.ok(calls.some(call => call.method === "DELETE"));

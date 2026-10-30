@@ -22,6 +22,7 @@ import { useChat, type ChatWindowState } from "../../stores/chat";
 import { roomTheme } from "../../utils/roomTheme";
 import { useDraggablePanel } from "../../composables/useDraggablePanel";
 import { useResizablePanel } from "../../composables/useResizablePanel";
+import { useWindows } from "../../stores/windows.store";
 import type { Room } from "../../types";
 import ChatWindowHeader from "./ChatWindowHeader.vue";
 import MessageList from "./MessageList.vue";
@@ -29,8 +30,14 @@ import MessageComposer from "./MessageComposer.vue";
 const props = defineProps<{ room: Room; entry: ChatWindowState }>();
 const emit = defineEmits<{ focusPin: [id: string, bounds?: DOMRect]; edit: [id: string]; editProfile: [] }>();
 const chat = useChat();
+const layout = useWindows();
+const userId = chat.user?.id ?? "guest";
 const panel = ref<HTMLElement | null>(null);
-const movable = useDraggablePanel(panel, props.entry.slot);
+const movable = useDraggablePanel(panel, props.entry.slot, {
+  load: () => layout.positionFor(userId, props.room.id),
+
+  save: position => layout.savePosition(userId, props.room.id, position),
+});
 const resizable = useResizablePanel(panel, movable.anchor, movable.move);
 </script>
 

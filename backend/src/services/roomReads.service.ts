@@ -1,7 +1,7 @@
 import type { Actor } from "../types/user.types.js";
 import type { RoomRepository, MessageRepository, RoomReadRepository } from "../types/repository.types.js";
 import type { PublishEvent } from "../realtime.js";
-import { ownedRoomsSchema, unreadSchema, markReadSchema } from "../schemas/roomReads.schema.js";
+import { ownedRoomsSchema, unreadSchema, markReadSchema, recentRoomsSchema } from "../schemas/roomReads.schema.js";
 import { objectIdSchema } from "../schemas/api.schemas.js";
 import { roomView } from "../helpers/responseMappers.js";
 import { httpResult } from "../helpers/httpResult.js";
@@ -10,6 +10,14 @@ import { requireRoom } from "./rooms.service.js";
 
 export function createRoomReadService(rooms: RoomRepository, messages: MessageRepository, reads: RoomReadRepository, publish: PublishEvent) {
   return {
+    async recentRooms(user: Actor, rawQuery: unknown) {
+      const query = recentRoomsSchema.parse(rawQuery);
+      const rows = await rooms.recent(user.id, query.limit);
+      return httpResult(200, { rooms: rows.map(row => ({
+        room: roomView(row.room), lastMessageAt: row.lastMessageAt.toISOString(), lastMessageId: row.lastMessageId,
+      })) });
+    },
+
     async myRooms(user: Actor, rawQuery: unknown) {
       const query = ownedRoomsSchema.parse(rawQuery);
       const rows = await rooms.listOwned(user.id, query.after, query.limit);

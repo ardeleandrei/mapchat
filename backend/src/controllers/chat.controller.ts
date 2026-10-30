@@ -10,6 +10,8 @@ export function chatController(service: Service, action: keyof Service): Request
     const actions = {
       myRooms: () => service.myRooms(user, request.query),
 
+      recentRooms: () => service.recentRooms(user, request.query),
+
       unreadCounts: () => service.unreadCounts(user, request.query),
 
       markRoomRead: () => service.markRoomRead(user, request.params.roomId, request.body),

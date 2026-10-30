@@ -11,3 +11,7 @@ export const unreadSchema = z.object({
 }).strict();
 
 export const markReadSchema = z.object({ messageId: objectIdSchema }).strict();
+
+export const recentRoomsSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+}).strict();

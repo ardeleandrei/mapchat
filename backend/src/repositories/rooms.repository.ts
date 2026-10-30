@@ -76,6 +76,22 @@ export function createRoomRepository(database: Database): RoomRepository { retur
     return rows.map(toRoom);
   },
 
+  async recent(userId, limit) {
+    const rows = await database.messages.aggregate<{
+      room: RoomDocument; lastMessageAt: Date; lastMessageId: ObjectId;
+    }>([
+      { $match: { userId: new ObjectId(userId) } },
+      { $sort: { createdAt: -1, _id: -1 } },
+      { $group: { _id: "$roomId", lastMessageAt: { $first: "$createdAt" }, lastMessageId: { $first: "$_id" } } },
+      { $sort: { lastMessageAt: -1, lastMessageId: -1 } },
+      { $lookup: { from: "rooms", localField: "_id", foreignField: "_id", as: "room" } },
+      { $unwind: "$room" },
+      { $match: { "room.deletedAt": { $exists: false } } },
+      { $limit: limit },
+    ]).toArray();
+    return rows.map(row => ({ room: toRoom(row.room), lastMessageAt: row.lastMessageAt, lastMessageId: row.lastMessageId.toHexString() }));
+  },
+
   async nearby(query) {
     const rooms = await database.rooms.find({
       deletedAt: { $exists: false },

@@ -1,6 +1,8 @@
 import { api } from "../clients/http.client";
-import type { Room } from "../types";
+import type { Room, RecentChatroom } from "../types";
 export const roomsService = {
+  recent: () => api<{ rooms: RecentChatroom[] }>("/me/rooms/recent"),
+
   mine: (after?: string) => api<{ rooms: Room[]; nextCursor: string | null }>("/me/rooms" + (after ? "?after=" + after : "")),
 
   remove: (id: string) => api<{ roomId: string }>("/rooms/" + id, "DELETE"),

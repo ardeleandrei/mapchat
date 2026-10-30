@@ -26,6 +26,7 @@ export const liveSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("error"), message: z.string(), requestId: z.string().uuid().optional() }),
 ]);
 export type Room = z.infer<typeof roomSchema>;
+export interface RecentChatroom { room: Room; lastMessageAt: string; lastMessageId: string }
 export type Message = z.infer<typeof messageSchema>;
 export type LiveEvent = z.infer<typeof liveSchema>;
 export interface User { id: string; username: string; lastRoomId: string | null; createdAt: string; registered: boolean }
@@ -34,3 +35,5 @@ export interface HistoryPage {
   direction: "older" | "newer";
 }
 export type Connection = "connecting" | "online" | "reconnecting" | "offline";
+
+export interface ChatWindowPosition { x: number; y: number }

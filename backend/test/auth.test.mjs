@@ -64,6 +64,7 @@ test("HTTP password authentication, session rotation and WebSocket revocation", 
       async deleteOne(query) { sessions.delete(query._id); },
     },
     rooms: { findOne: async () => null },
+    messages: { aggregate: () => ({ toArray: async () => [] }) },
   };
   const app = express(), server = createServer(app);
   const live = attachRealtime(server, database);

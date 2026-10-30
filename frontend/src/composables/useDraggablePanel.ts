@@ -1,7 +1,13 @@
 import { computed, onMounted, ref, type CSSProperties, type Ref } from "vue";
 import { useDraggable, useResizeObserver } from "@vueuse/core";
+import type { ChatWindowPosition } from "../types";
 
-export function useDraggablePanel(panel: Ref<HTMLElement | null>, slot = 0) {
+interface PanelPlacement {
+  load: () => ChatWindowPosition | undefined;
+  save: (position: ChatWindowPosition) => void;
+}
+
+export function useDraggablePanel(panel: Ref<HTMLElement | null>, slot = 0, placement?: PanelPlacement) {
   const handle = ref<HTMLElement | null>(null);
   const positioned = ref(false);
   const parent = computed(() => panel.value?.parentElement);
@@ -23,12 +29,13 @@ export function useDraggablePanel(panel: Ref<HTMLElement | null>, slot = 0) {
 
   function move(x: number, y: number, width?: number, height?: number) {
     const node = panel.value, parent = node?.parentElement;
-    if (!node || !parent || !parent.clientWidth || !parent.clientHeight) return;
+    if (!node || !parent || !parent.clientWidth || !parent.clientHeight || !node.offsetWidth || !node.offsetHeight) return;
     position.value = {
       x: Math.max(8, Math.min(x, parent.clientWidth - (width ?? node.offsetWidth) - 8)),
       y: Math.max(8, Math.min(y, parent.clientHeight - (height ?? node.offsetHeight) - 8)),
     };
     positioned.value = true;
+    placement?.save(position.value);
   }
 
   function anchor() {
@@ -48,17 +55,19 @@ export function useDraggablePanel(panel: Ref<HTMLElement | null>, slot = 0) {
     move(node.offsetLeft + delta[0] * step, node.offsetTop + delta[1] * step);
   }
 
-  onMounted(() => {
-    const node = panel.value;
-    if (node?.parentElement && slot > 0) {
-      const columns = Math.max(1, Math.floor((node.parentElement.clientWidth - 40) / (node.offsetWidth + 16)));
-      const column = slot % columns, row = Math.floor(slot / columns) % 6;
-      move(node.offsetLeft - column * (node.offsetWidth + 16) - row * 20, node.offsetTop + row * 36);
-    }
-  });
+  function restorePosition() {
+    const node = panel.value, container = node?.parentElement;
+    if (!node || !container || !container.clientWidth || !container.clientHeight) return;
+    const saved = placement?.load(), offset = (slot % 5) * 24;
+    move(saved?.x ?? (container.clientWidth - node.offsetWidth) / 2 + offset,
+      saved?.y ?? (container.clientHeight - node.offsetHeight) / 2 + offset);
+  }
+
+  onMounted(restorePosition);
 
   useResizeObserver(() => [panel.value, parent.value], () => {
     if (positioned.value) move(position.value.x, position.value.y);
+    else restorePosition();
   });
   const style = computed<CSSProperties>(() => positioned.value
     ? { left: position.value.x + "px", top: position.value.y + "px", right: "auto" } : {});

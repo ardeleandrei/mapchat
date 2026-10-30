@@ -9,6 +9,7 @@ export interface RoomRepository {
   insert(room: Omit<Room, "id">): Promise<Room>;
   list(query: RoomQuery): Promise<Room[]>;
   listOwned(userId: string, after: string | undefined, limit: number): Promise<Room[]>;
+  recent(userId: string, limit: number): Promise<{ room: Room; lastMessageAt: Date; lastMessageId: string }[]>;
   nearby(query: NearbyQuery): Promise<Room[]>;
   nextNumber(): Promise<number>;
   update(id: string, userId: string, revision: number, changes: Partial<Pick<Room, "title" | "color">>): Promise<Room | null>;

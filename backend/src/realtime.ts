@@ -39,6 +39,7 @@ interface Peer {
   ip: string;
   roomId: string | null;
   roomIds: Set<string>;
+  recentRoomIds: Set<string>;
   revision: number;
   alive: boolean;
   windowStart: number;
@@ -85,11 +86,11 @@ export function attachRealtime(
     } catch { peer.socket.terminate(); }
   }
 
-  function connect(socket: WebSocket, request: IncomingMessage, userId: string) {
+  function connect(socket: WebSocket, request: IncomingMessage, userId: string, recentRoomIds: string[]) {
     const peer: Peer = {
       socket, userId, cookie: request.headers.cookie,
       ip: request.socket.remoteAddress ?? "unknown",
-      roomId: null, roomIds: new Set(), revision: 0, alive: true,
+      roomId: null, roomIds: new Set(), recentRoomIds: new Set(recentRoomIds.reverse()), revision: 0, alive: true,
       windowStart: Date.now(), commands: 0,
     };
     peers.set(socket, peer);
@@ -174,13 +175,14 @@ export function attachRealtime(
       if (++budget.count > 30) { reject(socket, 429, "Too Many Requests"); return; }
       const user = await findSessionUser(database, request.headers.cookie);
       if (!user) { reject(socket, 401, "Unauthorized"); return; }
+      const recent = user.passwordHash ? await roomsRepository.recent(user._id.toHexString(), 20) : [];
       if (socket.destroyed) return;
       if (closing || peers.size >= 500 ||
           [...peers.values()].filter(peer => peer.ip === ip).length >= 20) {
         reject(socket, 503, "Service Unavailable"); return;
       }
       clearTimeout(upgradeTimeout);
-      wss.handleUpgrade(request, socket, head, ws => connect(ws, request, user._id.toHexString()));
+      wss.handleUpgrade(request, socket, head, ws => connect(ws, request, user._id.toHexString(), recent.map(row => row.room.id)));
     })().catch(() => reject(socket, 503, "Service Unavailable"));
   };
   server.on("upgrade", upgrade);
@@ -209,9 +211,15 @@ export function attachRealtime(
       if (event.type === "room.read" && peer.userId !== event.userId) continue;
       if (event.type === "room.deleted") {
         peer.roomIds.delete(event.roomId);
+        peer.recentRoomIds.delete(event.roomId);
         if (peer.roomId === event.roomId) peer.roomId = null;
       }
-      if (event.type !== "message.created" || peer.roomIds.has(event.message.roomId) || event.roomOwnerId === peer.userId)
+      if (event.type === "message.created" && event.message.userId === peer.userId) {
+        peer.recentRoomIds.delete(event.message.roomId);
+        peer.recentRoomIds.add(event.message.roomId);
+        if (peer.recentRoomIds.size > 20) peer.recentRoomIds.delete(peer.recentRoomIds.values().next().value!);
+      }
+      if (event.type !== "message.created" || peer.roomIds.has(event.message.roomId) || event.roomOwnerId === peer.userId || peer.recentRoomIds.has(event.message.roomId))
         send(peer, event);
     }
   };
