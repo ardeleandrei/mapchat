@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { usernameKey, isValidUsername } from "../dist/helpers/username.js";
 import { createProfileService } from "../dist/services/profile.service.js";
-import { createMessageService } from "../dist/services/messages.service.js";
+import { createChatService } from "../dist/services/chat.service.js";
 import { DuplicateKeyError } from "../dist/errors/DuplicateKeyError.js";
 
 test("username comparison handles case, spacing and compatibility characters", () => {
@@ -21,8 +21,11 @@ test("conflicting profile updates report 409 and do not return a saved profile",
 test("message writes reject usernames not owned by the current user", async () => {
   let writes = 0;
   const id = "100000000000000000000001";
-  const service = createMessageService({ insert: async () => { writes++; } },
-    { findById: async () => ({ id }) }, () => {}, { ownsUsername: async () => false });
+  const service = createChatService({
+    messages: { insert: async () => { writes++; } },
+    rooms: { findById: async () => ({ id }) },
+    profiles: { ownsUsername: async () => false },
+  }, () => {});
   await assert.rejects(service.createMessage({ id: "visitor", username: "Taken" }, id,
     { text: "Impersonation attempt", clientMessageId: crypto.randomUUID() }), { status: 409 });
   assert.equal(writes, 0);

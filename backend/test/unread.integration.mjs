@@ -8,12 +8,12 @@ import { ObjectId } from "mongodb";
 import { WebSocket } from "ws";
 import { connectDatabase } from "../dist/db.js";
 import { configureApp } from "../dist/app.js";
-import { attachRealtime } from "../dist/realtime.js";
+import { attachWebSocket } from "../dist/websocket.js";
 
 // A dedicated disposable database keeps this test away from the app's records.
 const databaseName = "wolfchatter_unread_test_" + randomUUID().replaceAll("-", "");
 const database = await connectDatabase((process.env.TEST_MONGODB_BASE || "mongodb://127.0.0.1:27018") + "/" + databaseName);
-const app = express(), server = createServer(app), live = attachRealtime(server, database);
+const app = express(), server = createServer(app), live = attachWebSocket(server, database);
 configureApp(app, database, live.publish, live.revokeSession);
 server.listen(0, "127.0.0.1"); await once(server, "listening");
 const base = "http://127.0.0.1:" + server.address().port;

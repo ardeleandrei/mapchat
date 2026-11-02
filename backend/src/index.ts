@@ -1,16 +1,16 @@
-import "dotenv/config";
+import "./config/environment.js";
 import express from "express";
 import { createServer } from "node:http";
 import { configureApp } from "./app.js";
 import { connectDatabase } from "./db.js";
-import { attachRealtime } from "./realtime.js";
+import { attachWebSocket } from "./websocket.js";
 
 const mongoUri = process.env.MONGODB_URI;
 if (!mongoUri) throw new Error("MONGODB_URI is required");
 const database = await connectDatabase(mongoUri);
 const app = express();
 const server = createServer(app);
-const live = attachRealtime(server, database);
+const live = attachWebSocket(server, database);
 const port = Number(process.env.PORT ?? 3000);
 
 configureApp(app, database, live.publish, live.revokeSession);

@@ -5,6 +5,8 @@ A map-based chat app built with Vue 3, Pinia, VueUse, Leaflet, Node.js/Express, 
 ## Run with Docker
 
 ```powershell
+# First checkout only; keep your existing .env if already configured:
+Copy-Item .env.example .env
 docker compose up --build -d --wait
 ```
 
@@ -22,7 +24,7 @@ npm run dev
 ```
 
 Open http://127.0.0.1:5173. Vite proxies `/api` and `/ws` to the Docker backend on port 3000.
-To develop the backend outside Docker, stop only the app container (`docker compose stop app`), copy `backend/.env.example` to `backend/.env`, and run `npm run dev` in `backend`.
+To develop the backend outside Docker, stop only the app container (`docker compose stop app`) and run `npm run dev` in `backend`. Both Node and Vite read the root `.env`.
 
 ## Accounts and sessions
 
@@ -52,19 +54,18 @@ frontend/src/
 
 backend/src/
   routes/               HTTP endpoint declarations and route-level limits
-  controllers/          HTTP request/response adaptation
+  controllers/          Chat, authentication, session bootstrap and profile handlers
   types/                User, room, message and repository interfaces
   errors/               Application error classes
   schemas/              Request validation
-  services/             Authentication, rooms, messages, profiles, history/retries
+  services/             Chat (rooms/messages/read tracking), authentication, sessions, profiles
   repositories/         MongoDB queries and atomic updates
-  middleware/           Consistent HTTP error handling
+  middleware/           Session authentication, request protection and error handling
   helpers/              Document/response mapping, cursors and persistence helpers
   app.ts                Express application configuration
   index.ts              Database/server startup and graceful shutdown
   db.ts                 Database connection, document types, indexes
-  identity.ts           Session cookie/bootstrap and authenticated HTTP middleware
-  realtime.ts           WebSocket validation, subscriptions, delivery, cleanup
+  websocket.ts           WebSocket validation, subscriptions, delivery, cleanup
 ```
 
 Components display data and handle interaction. Stores coordinate shared state through services; utilities contain pure functions. Session and window stores own their state; the chat store composes them and coordinates history/live updates. No router is needed for the current single workspace.
@@ -73,7 +74,7 @@ VueUse supplies pointer dragging, resize observation, debounced map-bound update
 
 Vue files use template, script, then scoped styles. Component-specific CSS lives with its component; `src/styles/` contains scoped shared panel/dialog surfaces, form controls, and feedback styles. `style.css` contains only page defaults, common element behavior, and accessibility utilities. Leaflet-generated markers use deep selectors anchored to the map component. Room theme variables inherit from chat windows into their child components.
 
-Backend services receive repository interfaces rather than a database connection. Records crossing that boundary use string IDs and ordinary dates. MongoDB filters, ObjectId conversion, cursor query ordering, and duplicate-key error translation live in repository adapters. The message service validates pagination, decodes cursors, and assembles history responses; cursor utilities perform no persistence. Routes and identity setup wire the concrete adapters into services. WebSocket room-existence checks also use the room repository.
+Backend services receive repository interfaces rather than a database connection. Records crossing that boundary use string IDs and ordinary dates. MongoDB filters, ObjectId conversion, cursor query ordering, and duplicate-key error translation live in repository adapters. The chat service owns room operations, message submission/history, and read tracking. It validates pagination, decodes cursors, and assembles history responses; cursor utilities perform no persistence. Application setup wires concrete repositories, services, controllers, and routes. The session service creates, validates, and revokes sessions for both HTTP and WebSockets. Auth middleware attaches the current user and enforces request protection; controllers handle cookie responses and session bootstrap. WebSocket room-existence checks also use the room repository.
 
 HTTP writes are persisted before WebSocket broadcasts. Room creation and message submission use idempotency keys; room edits use revisions to reject stale updates. Only the creator can edit a room. The WebSocket connection supports multiple room subscriptions and reconnects with history reconciliation, without periodic polling.
 
@@ -83,9 +84,9 @@ MongoDB persists users, sessions, rooms, messages, and per-user room read positi
 
 Each sidebar entry shows its room's unread badge, hidden at zero and capped at **99+**. Duplicate entries in both sections share the same count. Unread means messages from other users newer than the saved read position. A visible open chat is marked read through the latest message loaded into its view; minimized chats and hidden browser tabs retain unread messages. Read positions advance monotonically in MongoDB and synchronize across signed-in browsers. Sockets receive updates for created rooms and the latest 20 recently messaged rooms even without open windows; new messages by the same user also synchronize recent activity across browsers. Other windows use explicit room subscriptions. WebSocket events trigger batched unread-count refreshes, with no periodic polling. HTTP/history retries cannot double-count saved messages.
 
-`GET /api/me/rooms` paginates created rooms; `GET /api/me/rooms/recent?limit=20` returns recently messaged rooms (maximum 50); `GET /api/me/unread?roomIds=...` returns up to 100 per-room counts, capped at 100 for display; `POST /api/rooms/:id/read` accepts a message ID from that room and advances the current user's read marker. Room deletion also removes read markers and excludes the room from recent results. Pinia keeps drafts in memory. Window positions are saved per user and room in local browser storage, restored after closing/reloading, and clamped to the current viewport. First-time windows open near the center with a small offset between new windows. The geographic index and nearby API exist; user-facing name/city/coordinate search remains planned in `BACKLOG.md`.
+`GET /api/me/rooms` paginates created rooms; `GET /api/me/rooms/recent?limit=20` returns recently messaged rooms (maximum 50); `GET /api/me/unread?roomIds=...` returns up to 100 per-room counts, capped at 100 for display; `POST /api/rooms/:id/read` accepts a message ID from that room and advances the current user's read marker. Room deletion also removes read markers and excludes the room from recent results. Pinia keeps drafts in memory. Window positions are saved per user and room in local browser storage, restored after closing/reloading, and clamped to the current viewport. First-time windows open near the center with a small offset between new windows. The geographic index and nearby API exist; user-facing name/city/coordinate search is deferred.
 
-The current realtime fan-out is in-process. Multiple app replicas would require a shared event broker; this refactor retains the single-process deployment.
+The current WebSocket fan-out is in-process. Multiple app replicas would require a shared event broker; this refactor retains the single-process deployment.
 
 ## Verification
 
@@ -103,4 +104,26 @@ Integration tests create diagnostic rooms/messages and preserve existing records
 
 ## Environment
 
-See `backend/.env.example` for host development. Compose configures its own container environment. Production hosting should provide HTTPS and set `COOKIE_SECURE=true` with the actual frontend origins in `ALLOWED_ORIGINS`.
+Copy the root [.env.example](.env.example) to `.env` once and edit it for your machine. `.env` is excluded from Git and Docker build contexts; commit only the example. Shell/deployment variables take precedence. Existing optional `backend/.env` values override root defaults for direct backend runs.
+
+| Variable | Purpose |
+| --- | --- |
+| `NODE_ENV` | Set by Docker/Azure at runtime. Leave it out of the shared file so Vite selects the correct development/build mode. |
+| `PORT` | Backend listening port and Docker app host port; default `3000`. |
+| `MONGODB_URI` | Database URL for Node running on your machine, or the Atlas URL on Azure. |
+| `DOCKER_MONGODB_URI` | Database URL passed to the app container; uses the `mongodb` service hostname locally. |
+| `MONGODB_HOST_PORT` | Loopback port published for Compass and direct Node development; default `27018`. |
+| `COOKIE_SECURE` | `false` for local HTTP; `true` for production HTTPS. |
+| `ALLOWED_ORIGINS` | Comma-separated exact browser origins allowed for HTTP and WebSocket requests. |
+| `DEV_FRONTEND_PORT` | Vite development port; default `5173`. |
+| `VITE_API_PROXY_TARGET` | Vite's development HTTP/WebSocket backend target. Never put secrets in `VITE_*` variables. |
+| `TEST_API_URL` | Optional API integration-test target. |
+| `TEST_MONGODB_BASE` | Optional MongoDB host URL for isolated tests; the test appends a temporary database name. |
+
+If you change ports, update matching database/proxy/test URLs and allowed origins. Restart the Node/Vite development processes after editing `.env`; run `docker compose up -d --wait` to apply Compose settings. A rebuild is needed when application code changes, not for these runtime settings.
+
+Azure app settings supply `NODE_ENV=production`, `PORT=3000`, `MONGODB_URI` (Atlas), `COOKIE_SECURE=true`, and the deployed HTTPS origins in `ALLOWED_ORIGINS`. Docker Compose/dev/test settings are local tooling options. The browser uses same-origin `/api` and `/ws`; database credentials stay on the backend.
+
+## Infrastructure and costs
+
+See [INFRASTRUCTURE_COSTS.md](INFRASTRUCTURE_COSTS.md) for the proposed Azure staging/production deployment, monthly cost table, assumptions, and scaling limitations.

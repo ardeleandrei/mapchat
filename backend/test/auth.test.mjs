@@ -7,7 +7,7 @@ import express from "express";
 import { MongoServerError } from "mongodb";
 import { WebSocket } from "ws";
 import { configureApp } from "../dist/app.js";
-import { attachRealtime } from "../dist/realtime.js";
+import { attachWebSocket } from "../dist/websocket.js";
 import { usernameKey } from "../dist/helpers/username.js";
 import { toUser } from "../dist/helpers/documentMappers.js";
 import { hashPassword, verifyPassword } from "../dist/helpers/password.js";
@@ -67,7 +67,7 @@ test("HTTP password authentication, session rotation and WebSocket revocation", 
     messages: { aggregate: () => ({ toArray: async () => [] }) },
   };
   const app = express(), server = createServer(app);
-  const live = attachRealtime(server, database);
+  const live = attachWebSocket(server, database);
   configureApp(app, database, live.publish, live.revokeSession);
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   const base = "http://127.0.0.1:" + server.address().port;

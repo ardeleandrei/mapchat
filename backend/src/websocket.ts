@@ -5,7 +5,9 @@ import { createRoomRepository } from "./repositories/rooms.repository.js";
 import { z } from "zod";
 import type { Database } from "./db.js";
 import type { roomView, messageView } from "./helpers/responseMappers.js";
-import { findSessionUser, sessionHash } from "./identity.js";
+import { sessionHash } from "./helpers/sessionCookie.js";
+import { createSessionService } from "./services/session.service.js";
+import { createSessionRepository } from "./repositories/session.repository.js";
 
 export type LiveEvent =
   | { type: "room.created"; room: ReturnType<typeof roomView> }
@@ -46,12 +48,13 @@ interface Peer {
   commands: number;
 }
 
-export function attachRealtime(
+export function attachWebSocket(
   server: Server,
   database: Database,
   options: { heartbeatMs?: number } = {},
 ) {
   const roomsRepository = createRoomRepository(database);
+  const sessions = createSessionService(createSessionRepository(database));
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: 4096,
@@ -173,16 +176,16 @@ export function attachRealtime(
       if (budget.until <= now) { budget.count = 0; budget.until = now + 60_000; }
       attempts.set(ip, budget);
       if (++budget.count > 30) { reject(socket, 429, "Too Many Requests"); return; }
-      const user = await findSessionUser(database, request.headers.cookie);
+      const user = await sessions.findUser(request.headers.cookie);
       if (!user) { reject(socket, 401, "Unauthorized"); return; }
-      const recent = user.passwordHash ? await roomsRepository.recent(user._id.toHexString(), 20) : [];
+      const recent = user.registered ? await roomsRepository.recent(user.id, 20) : [];
       if (socket.destroyed) return;
       if (closing || peers.size >= 500 ||
           [...peers.values()].filter(peer => peer.ip === ip).length >= 20) {
         reject(socket, 503, "Service Unavailable"); return;
       }
       clearTimeout(upgradeTimeout);
-      wss.handleUpgrade(request, socket, head, ws => connect(ws, request, user._id.toHexString(), recent.map(row => row.room.id)));
+      wss.handleUpgrade(request, socket, head, ws => connect(ws, request, user.id, recent.map(row => row.room.id)));
     })().catch(() => reject(socket, 503, "Service Unavailable"));
   };
   server.on("upgrade", upgrade);
@@ -194,8 +197,8 @@ export function attachRealtime(
       peer.alive = false;
       try { peer.socket.ping(); } catch { peer.socket.terminate(); }
       // TTL cleanup is asynchronous; validate expiration explicitly.
-      void findSessionUser(database, peer.cookie).then(user => {
-        if (!user || user._id.toHexString() !== peer.userId)
+      void sessions.findUser(peer.cookie).then(user => {
+        if (!user || user.id !== peer.userId)
           peer.socket.close(4401, "Session expired; initialize /api/me again");
       }).catch(() => peer.socket.close(1011, "Session check unavailable"));
     }

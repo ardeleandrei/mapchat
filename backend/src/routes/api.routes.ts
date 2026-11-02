@@ -4,10 +4,10 @@ import { createProfileRepository } from "../repositories/profile.repository.js";
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import type { Database } from "../db.js";
-import type { PublishEvent } from "../realtime.js";
+import type { PublishEvent } from "../websocket.js";
 import { createChatService } from "../services/chat.service.js";
 import { chatController } from "../controllers/chat.controller.js";
-import { currentUser } from "../identity.js";
+import { currentUser } from "../middleware/auth.middleware.js";
 import { createRoomReadRepository } from "../repositories/roomReads.repository.js";
 
 export function createApi(database: Database, publish: PublishEvent) {
@@ -16,7 +16,7 @@ export function createApi(database: Database, publish: PublishEvent) {
     profiles: createProfileRepository(database), reads: createRoomReadRepository(database) }, publish);
   router.use((_request, response, next) => { response.setHeader("Cache-Control", "no-store"); next(); });
   router.use((request, response, next) => {
-    if (!["GET", "HEAD"].includes(request.method) && !currentUser(response).passwordHash) {
+    if (!["GET", "HEAD"].includes(request.method) && !currentUser(response).registered) {
       response.status(403).json({ error: "Sign in to create or change chatrooms and send messages." });
       return;
     }

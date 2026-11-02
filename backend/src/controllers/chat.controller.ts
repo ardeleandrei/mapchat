@@ -1,12 +1,12 @@
 import type { RequestHandler } from "express";
-import { currentUser } from "../identity.js";
+import { currentUser } from "../middleware/auth.middleware.js";
 import type { createChatService } from "../services/chat.service.js";
 type Service = ReturnType<typeof createChatService>;
 
 export function chatController(service: Service, action: keyof Service): RequestHandler {
   return async (request, response) => {
     const visitor = currentUser(response);
-    const user = { id: visitor._id.toHexString(), username: visitor.username };
+    const user = { id: visitor.id, username: visitor.username };
     const actions = {
       myRooms: () => service.myRooms(user, request.query),
 

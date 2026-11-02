@@ -6,7 +6,7 @@ import { once } from "node:events";
 import { setTimeout as sleep } from "node:timers/promises";
 import { ObjectId } from "mongodb";
 import { WebSocket } from "ws";
-import { attachRealtime } from "../dist/realtime.js";
+import { attachWebSocket } from "../dist/websocket.js";
 
 test("WebSocket session validation and room routing", async t => {
   const users = [new ObjectId(), new ObjectId()];
@@ -27,7 +27,7 @@ test("WebSocket session validation and room routing", async t => {
     } },
   };
   const server = createServer((_request, response) => response.end());
-  const live = attachRealtime(server, database, { heartbeatMs: 100 });
+  const live = attachWebSocket(server, database, { heartbeatMs: 100 });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const url = "ws://127.0.0.1:" + server.address().port + "/ws";

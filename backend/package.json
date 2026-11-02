@@ -8,8 +8,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test:integration": "node test/integration.mjs",
-    "test:unread": "npm run build && node test/unread.integration.mjs"
+    "test:integration": "node --env-file-if-exists=../.env test/integration.mjs",
+    "test:unread": "npm run build && node --env-file-if-exists=../.env test/unread.integration.mjs"
   },
   "keywords": [],
   "author": "",
