@@ -137,3 +137,14 @@ See [AI_USAGE.md](AI_USAGE.md) for how I used the Codex desktop app during plann
 [AGENTS.md](AGENTS.md) records the project context, architecture conventions, and AI working rules. [REVIEW_CONFIG.md](REVIEW_CONFIG.md) contains the saved review prompt, scope, severity rules, and commands. The review is an AI self-review by the implementation agent, not an independent audit or hosted review service.
 
 See [REVIEW_REPORT.md](REVIEW_REPORT.md) for the findings and validation results, and [REVIEW_NOTES.md](REVIEW_NOTES.md) for what was fixed or deferred. In particular, Azure proxy/IP handling and load testing remain deployment work; local test success does not establish production readiness or user capacity.
+
+## Screenshots
+
+Multiple color-coded chats, arranged over the map:
+
+![Two color-coded conversations arranged beside the map, signed in as andrei](docs/screenshots/multiple-chats.jpg)
+
+| Explore the map | Make a room your own |
+| --- | --- |
+| [![European chatroom pins with My Chatrooms, Recent Chats, and unread badges](docs/screenshots/europe-overview.jpg)](docs/screenshots/europe-overview.jpg) | [![Creator dialog for editing the Berlin chatroom title and pin color](docs/screenshots/room-customization.jpg)](docs/screenshots/room-customization.jpg) |
+| Find rooms by their pins and return to conversations from the sidebar. | Creators can change a room's title and matching window/pin color. |
