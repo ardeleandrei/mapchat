@@ -36,3 +36,12 @@ isolated MongoDB integration checks, Compose validation, and whitespace checks
 passed in this follow-up. Runtime changes are limited to R6/R7 lifecycle and
 consistency fixes; no architectural rewrite or new dependency was needed.
 No commit, push, database reset, or Azure deployment was performed.
+
+## Document type extraction
+
+Moved the five MongoDB document interfaces to types/document.types.ts and
+updated imports. No behavior changes or deferred findings for this refactor.
+Backend build and 34 tests pass.
+
+Completed coverage for all six collections by adding CounterDocument and an
+explicit RoomReadDocument._id. Backend build and 34 tests pass.

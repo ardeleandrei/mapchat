@@ -1,5 +1,6 @@
 import { ObjectId, type Filter } from "mongodb";
-import type { Database, MessageDocument } from "../db.js";
+import type { Database } from "../db.js";
+import type { MessageDocument } from "../types/document.types.js";
 import type { MessageRepository } from "../types/repository.types.js";
 import type { MessagePageQuery } from "../types/message.types.js";
 import { toMessage } from "../helpers/documentMappers.js";

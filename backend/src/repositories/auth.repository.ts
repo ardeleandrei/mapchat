@@ -1,5 +1,6 @@
 import { ObjectId } from "mongodb";
-import type { Database, UserDocument } from "../db.js";
+import type { Database } from "../db.js";
+import type { UserDocument } from "../types/document.types.js";
 import type { AuthRepository } from "../types/auth.types.js";
 import { toUser } from "../helpers/documentMappers.js";
 import { usernameKey } from "../helpers/username.js";

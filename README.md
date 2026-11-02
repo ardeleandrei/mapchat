@@ -64,7 +64,7 @@ backend/src/
   helpers/              Document/response mapping, cursors and persistence helpers
   app.ts                Express application configuration
   index.ts              Database/server startup and graceful shutdown
-  db.ts                 Database connection, document types, indexes
+  db.ts                 Database connection and indexes
   websocket.ts           WebSocket validation, subscriptions, delivery, cleanup
 ```
 

@@ -3,7 +3,8 @@ import type { Filter } from "mongodb";
 import type { RoomRepository } from "../types/repository.types.js";
 import { toRoom } from "../helpers/documentMappers.js";
 import { translateWriteError } from "../helpers/persistenceErrors.js";
-import type { Database, RoomDocument } from "../db.js";
+import type { Database } from "../db.js";
+import type { CounterDocument, RoomDocument } from "../types/document.types.js";
 
 export function createRoomRepository(database: Database): RoomRepository { return {
   async exists(id) { return Boolean(await database.rooms.findOne({ _id: new ObjectId(id), deletedAt: { $exists: false } }, { projection: { _id: 1 } })); },
@@ -108,10 +109,7 @@ export function createRoomRepository(database: Database): RoomRepository { retur
     return rooms.map(toRoom);
   },
 
-  async nextNumber() { const counter = await database.db.collection<{
-      _id: string;
-      value: number;
-    }>("counters").findOneAndUpdate(
+  async nextNumber() { const counter = await database.db.collection<CounterDocument>("counters").findOneAndUpdate(
       { _id: "roomNumber" },
       { $inc: { value: 1 } },
       { upsert: true, returnDocument: "after" },

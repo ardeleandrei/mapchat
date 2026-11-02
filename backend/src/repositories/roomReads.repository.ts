@@ -1,5 +1,6 @@
 import { ObjectId, MongoServerError, type Filter } from "mongodb";
-import type { Database, MessageDocument } from "../db.js";
+import type { Database } from "../db.js";
+import type { MessageDocument } from "../types/document.types.js";
 import type { RoomReadRepository } from "../types/repository.types.js";
 import { RoomUnavailableError } from "../errors/RoomUnavailableError.js";
 

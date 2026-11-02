@@ -1,4 +1,4 @@
-import type { RoomDocument, MessageDocument, UserDocument } from "../db.js";
+import type { RoomDocument, MessageDocument, UserDocument } from "../types/document.types.js";
 import type { Room } from "../types/room.types.js";
 import type { Message } from "../types/message.types.js";
 import type { User } from "../types/user.types.js";

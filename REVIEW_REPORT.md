@@ -210,3 +210,19 @@ passing regressions. Final automated local validation passes: 34 backend tests,
 Azure deployment still needs R1 resolved, and the submission's PRD page limit
 still needs R2 verified.
 See [REVIEW_NOTES.md](REVIEW_NOTES.md) for the short fixed/deferred summary.
+
+## Document type extraction follow-up
+
+Moved MongoDB document interfaces unchanged from db.ts into
+backend/src/types/document.types.ts and updated repository/mapper imports.
+Reviewed the diff against the applicable structure and behavior-preservation
+criteria: no runtime logic or database shape changed; no findings.
+Backend TypeScript build and all 34 tests passed. The first sandboxed run
+could not connect to local test servers (EACCES); the authorized rerun passed.
+Database integration and frontend checks were not run for this type-only change.
+
+Document coverage follow-up: extracted the remaining inline CounterDocument
+into the same document.types.ts file and explicitly declared RoomReadDocument._id.
+All six application collections now have named document interfaces in that file.
+Reviewed as type-only changes; backend build and all 34 tests pass again.
+No database data or runtime query behavior changed.
