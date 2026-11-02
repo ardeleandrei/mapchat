@@ -132,6 +132,8 @@ See [INFRASTRUCTURE_COSTS.md](INFRASTRUCTURE_COSTS.md) for the proposed Azure st
 
 ## AI setup and code review
 
+See [AI_USAGE.md](AI_USAGE.md) for how I used the Codex desktop app during planning, implementation, testing, and review.
+
 [AGENTS.md](AGENTS.md) records the project context, architecture conventions, and AI working rules. [REVIEW_CONFIG.md](REVIEW_CONFIG.md) contains the saved review prompt, scope, severity rules, and commands. The review is an AI self-review by the implementation agent, not an independent audit or hosted review service.
 
 See [REVIEW_REPORT.md](REVIEW_REPORT.md) for the findings and validation results, and [REVIEW_NOTES.md](REVIEW_NOTES.md) for what was fixed or deferred. In particular, Azure proxy/IP handling and load testing remain deployment work; local test success does not establish production readiness or user capacity.
