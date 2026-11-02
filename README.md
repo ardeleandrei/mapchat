@@ -88,6 +88,8 @@ Each sidebar entry shows its room's unread badge, hidden at zero and capped at *
 
 The current WebSocket fan-out is in-process. Additional running copies of the backend would require a shared event broker; this version retains the single-process deployment.
 
+Chats scroll to the latest message after a successful send and when opened or restored. Typing does not change the scroll position; loading earlier messages preserves your place.
+
 ## Verification
 
 ```powershell

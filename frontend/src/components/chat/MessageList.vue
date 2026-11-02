@@ -25,7 +25,7 @@
 import { computed, nextTick, ref, watch, onMounted } from "vue";
 import { useChat } from "../../stores/chat";
 import type { Room } from "../../types";
-const props = defineProps<{ room: Room }>();
+const props = defineProps<{ room: Room; active: boolean }>();
 const chat = useChat();
 const state = computed(() => chat.history(props.room.id));
 const thread = ref<HTMLDivElement | null>(null);
@@ -36,19 +36,32 @@ const date = (value: string) => new Intl.DateTimeFormat(undefined, {
 
 const fullDate = (value: string) => new Date(value).toLocaleString();
 
+async function scrollToBottom() {
+  await nextTick();
+  if (props.active && thread.value) thread.value.scrollTop = thread.value.scrollHeight;
+}
+
+defineExpose({ scrollToBottom });
+
 async function older() {
   if (!thread.value) return;
   const oldHeight = thread.value.scrollHeight, oldTop = thread.value.scrollTop;
   await chat.loadHistory(props.room.id, true); await nextTick();
   if (thread.value) thread.value.scrollTop = thread.value.scrollHeight - oldHeight + oldTop;
 }
+
+watch(() => [props.active, state.value.loaded], () => {
+  if (props.active && state.value.loaded) void scrollToBottom();
+}, { flush: "post" });
+
 watch(() => state.value.items.at(-1)?.id, async () => {
   const nearBottom = !thread.value ||
     thread.value.scrollHeight - thread.value.scrollTop - thread.value.clientHeight < 80;
   await nextTick();
-  if (nearBottom && thread.value) thread.value.scrollTop = thread.value.scrollHeight;
+  if (nearBottom) await scrollToBottom();
 }, { flush: "pre" });
-onMounted(() => { if (thread.value) thread.value.scrollTop = thread.value.scrollHeight; });
+
+onMounted(() => { void scrollToBottom(); });
 
 </script>
 

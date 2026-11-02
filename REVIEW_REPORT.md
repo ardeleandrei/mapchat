@@ -226,3 +226,15 @@ into the same document.types.ts file and explicitly declared RoomReadDocument._i
 All six application collections now have named document interfaces in that file.
 Reviewed as type-only changes; backend build and all 34 tests pass again.
 No database data or runtime query behavior changed.
+
+## Chat scrolling follow-up
+
+Reviewed component event flow and Vue update timing under REVIEW_CONFIG.md.
+Successful sends scroll their own message list after rendering. Opening/restoring
+a room and initial history completion also scroll to the bottom. Typing does
+not trigger scrolling. Earlier-history loading retains position preservation,
+and incoming messages retain near-bottom following.
+Frontend tests: 23 passed. Frontend TypeScript/production build passed.
+The tests cover state behavior, not browser scroll geometry; manual browser
+scrolling verification was not performed. Backend/database checks were not
+needed for this UI-only change.

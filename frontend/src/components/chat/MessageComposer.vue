@@ -27,7 +27,7 @@ import { computed } from "vue";
 import { useChat } from "../../stores/chat";
 import type { Room } from "../../types";
 const props = defineProps<{ room: Room }>();
-const emit = defineEmits<{ editProfile: [] }>();
+const emit = defineEmits<{ editProfile: []; sent: [] }>();
 const chat = useChat();
 const draft = computed({
   get: () => chat.drafts[props.room.id] ?? "",
@@ -42,6 +42,7 @@ async function send() {
   if (!canSend.value) return;
   if (await chat.send(id, text)) {
     if (chat.drafts[id] === text) chat.drafts[id] = "";
+    emit("sent");
   }
 }
 

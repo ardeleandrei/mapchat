@@ -45,3 +45,9 @@ Backend build and 34 tests pass.
 
 Completed coverage for all six collections by adding CounterDocument and an
 explicit RoomReadDocument._id. Backend build and 34 tests pass.
+
+## Chat scrolling
+
+Added scrolling after successful sends and on opening/restoring rooms. Typing
+does not trigger scrolling. Frontend tests (23) and build pass; manual browser
+scrolling verification was not performed.

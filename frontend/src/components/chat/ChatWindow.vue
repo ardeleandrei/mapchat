@@ -9,8 +9,8 @@
     <p v-if="chat.connection !== 'online' || chat.liveError" class="notice" role="status">
       {{ chat.liveError || "Reconnecting to live chat…" }}
     </p>
-    <MessageList :room="room" />
-    <MessageComposer :room="room" @edit-profile="emit('editProfile')" />
+    <MessageList ref="messageList" :room="room" :active="!entry.minimized" />
+    <MessageComposer :room="room" @sent="messageList?.scrollToBottom()" @edit-profile="emit('editProfile')" />
     <button :ref="resizable.handle" type="button" class="resize-handle" :aria-label="'Resize ' + room.title"
       title="Drag the bottom-left corner to resize; use arrow keys when focused" @keydown="resizable.keyResize"></button>
   </aside>
@@ -33,6 +33,7 @@ const chat = useChat();
 const layout = useWindows();
 const userId = chat.user?.id ?? "guest";
 const panel = ref<HTMLElement | null>(null);
+const messageList = ref<InstanceType<typeof MessageList> | null>(null);
 const movable = useDraggablePanel(panel, props.entry.slot, {
   load: () => layout.positionFor(userId, props.room.id),
 
