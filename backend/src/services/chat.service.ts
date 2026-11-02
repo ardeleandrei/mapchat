@@ -247,7 +247,12 @@ export function createChatService(
       await requireRoom(roomId);
       const message = await messages.findById(roomId, input.messageId);
       if (!message) throw new HttpError(404, "Message not found in this chatroom");
-      await reads.advance(user.id, roomId, { id: message.id, createdAt: message.createdAt });
+      try {
+        await reads.advance(user.id, roomId, { id: message.id, createdAt: message.createdAt });
+      } catch (error) {
+        if (error instanceof RoomUnavailableError) throw new HttpError(404, "Chatroom not found");
+        throw error;
+      }
       notify({ type: "room.read", roomId, userId: user.id });
       return httpResult(200, { roomId });
     },

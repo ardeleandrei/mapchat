@@ -76,7 +76,7 @@ Vue files use template, script, then scoped styles. Component-specific CSS lives
 
 Backend services receive repository interfaces rather than a database connection. Records crossing that boundary use string IDs and ordinary dates. MongoDB filters, ObjectId conversion, cursor query ordering, and duplicate-key error translation live in repository adapters. The chat service owns room operations, message submission/history, and read tracking. It validates pagination, decodes cursors, and assembles history responses; cursor utilities perform no persistence. Application setup wires concrete repositories, services, controllers, and routes. The session service creates, validates, and revokes sessions for both HTTP and WebSockets. Auth middleware attaches the current user and enforces request protection; controllers handle cookie responses and session bootstrap. WebSocket room-existence checks also use the room repository.
 
-HTTP writes are persisted before WebSocket broadcasts. Room creation and message submission use idempotency keys; room edits use revisions to reject stale updates. Only the creator can edit a room. The WebSocket connection supports multiple room subscriptions and reconnects with history reconciliation, without periodic polling.
+HTTP writes are persisted before WebSocket broadcasts. Room creation and message submission use idempotency keys; room edits use revisions to reject stale updates. Only the creator can edit a room. The WebSocket connection supports multiple room subscriptions and reconnects with history reconciliation, without periodic polling. Logout and shutdown also reject handshakes waiting on database work. A read request that loses a race with room deletion returns 404 and cleans up its marker.
 
 Creators can choose **Edit → Delete chatroom…**, then confirm deletion. `DELETE /api/rooms/:id` enforces creator ownership, removes the room's messages, and clears saved last-room references. The pin and open/minimized chats disappear through `room.deleted` events; reconnect/history refresh also removes rooms deleted while offline. The room document is retained with `deletedAt` as a tombstone, excluded from normal reads and map/nearby queries. This preserves ownership and creation keys for safe cleanup retries and prevents old create requests from resurrecting the room. There is no restore action. An in-flight message write checks room availability and removes itself if deletion won the race.
 
@@ -86,7 +86,7 @@ Each sidebar entry shows its room's unread badge, hidden at zero and capped at *
 
 `GET /api/me/rooms` paginates created rooms; `GET /api/me/rooms/recent?limit=20` returns recently messaged rooms (maximum 50); `GET /api/me/unread?roomIds=...` returns up to 100 per-room counts, capped at 100 for display; `POST /api/rooms/:id/read` accepts a message ID from that room and advances the current user's read marker. Room deletion also removes read markers and excludes the room from recent results. Pinia keeps drafts in memory. Window positions are saved per user and room in local browser storage, restored after closing/reloading, and clamped to the current viewport. First-time windows open near the center with a small offset between new windows. The geographic index and nearby API exist; user-facing name/city/coordinate search is deferred.
 
-The current WebSocket fan-out is in-process. Multiple app replicas would require a shared event broker; this refactor retains the single-process deployment.
+The current WebSocket fan-out is in-process. Additional running copies of the backend would require a shared event broker; this version retains the single-process deployment.
 
 ## Verification
 
@@ -127,3 +127,9 @@ Azure app settings supply `NODE_ENV=production`, `PORT=3000`, `MONGODB_URI` (Atl
 ## Infrastructure and costs
 
 See [INFRASTRUCTURE_COSTS.md](INFRASTRUCTURE_COSTS.md) for the proposed Azure staging/production deployment, monthly cost table, assumptions, and scaling limitations.
+
+## AI setup and code review
+
+[AGENTS.md](AGENTS.md) records the project context, architecture conventions, and AI working rules. [REVIEW_CONFIG.md](REVIEW_CONFIG.md) contains the saved review prompt, scope, severity rules, and commands. The review is an AI self-review by the implementation agent, not an independent audit or hosted review service.
+
+See [REVIEW_REPORT.md](REVIEW_REPORT.md) for the findings and validation results, and [REVIEW_NOTES.md](REVIEW_NOTES.md) for what was fixed or deferred. In particular, Azure proxy/IP handling and load testing remain deployment work; local test success does not establish production readiness or user capacity.

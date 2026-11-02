@@ -133,6 +133,32 @@ try {
   assert.equal((await owner.request("/me/rooms/recent")).rooms.some(row => row.room.id === first), false);
   console.log("PASS: owned-room pagination, per-chat unread counts, 99+ cap, own-message exclusion, monotonic reads, session persistence, creator live delivery, private read events, retry safety and deletion cleanup.");
   console.log("PASS: recent chats include owned/other rooms, follow the user's message order, exclude deleted rooms, and receive live replies across sessions without open windows.");
+
+  // Pause a read write after service validation, then finish deletion first.
+  const secondMessage = await database.messages.findOne({ roomId: rooms[1]._id });
+  const updateRead = database.roomReads.updateOne.bind(database.roomReads);
+  let pauseRead, finishRead;
+  const readPaused = new Promise(resolve => { pauseRead = resolve; });
+  const readGate = new Promise(resolve => { finishRead = resolve; });
+  database.roomReads.updateOne = async (filter, ...args) => {
+    if (filter.roomId.equals(rooms[1]._id) && filter.userId.equals(owner.userId)) {
+      pauseRead(); await readGate;
+    }
+    return updateRead(filter, ...args);
+  };
+  try {
+    const reading = owner.request("/rooms/" + second + "/read", "POST", { messageId: secondMessage._id.toHexString() }, 404);
+    await Promise.race([readPaused, reading.then(() => { throw new Error("Read was not paused before persistence"); })]);
+    await owner.request("/rooms/" + second, "DELETE");
+    finishRead();
+    await reading;
+    assert.equal(await database.roomReads.countDocuments({ roomId: rooms[1]._id }), 0,
+      "a read request must not recreate markers after room deletion");
+    console.log("PASS: a read racing with room deletion returns 404 and leaves no read markers.");
+  } finally {
+    finishRead();
+    database.roomReads.updateOne = updateRead;
+  }
 } finally {
   for (const socket of sockets) socket.terminate();
   await live.close(); await new Promise(resolve => server.close(resolve));

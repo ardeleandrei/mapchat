@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createServer } from "vite";
-import { createPinia, setActivePinia, getActivePinia } from "pinia";
+import { createPinia, setActivePinia } from "pinia";
 import { createSSRApp } from "vue";
 import { renderToString } from "vue/server-renderer";
 
@@ -156,7 +156,8 @@ test("Frontend API and WebSocket state", async t => {
       await sleep(10);
     }
   }
-  setActivePinia(createPinia());
+  const pinia = createPinia();
+  setActivePinia(pinia);
   chat = useChat();
   await chat.start(); await until(() => chat.connection === "online");
   await chat.selectRoom(room1); await until(() => chat.currentHistory?.loaded);
@@ -311,7 +312,7 @@ test("Frontend API and WebSocket state", async t => {
     for (let i = 0; i < 105; i++) incoming(first, "Unread burst " + i);
     await until(() => chat.unreadCounts[first.id] === 100);
     const { default: Sidebar } = await vite.ssrLoadModule("/src/components/chat/MinimizedChats.vue");
-    assert.match(await renderToString(createSSRApp(Sidebar).use(getActivePinia())), />99\+<\/span>/);
+    assert.match(await renderToString(createSSRApp(Sidebar).use(pinia)), />99\+<\/span>/);
     chat.stop(); setActivePinia(createPinia()); chat = useChat();
     await chat.start(); await until(() => chat.connection === "online");
     assert.equal(chat.myChatrooms.length, 25);

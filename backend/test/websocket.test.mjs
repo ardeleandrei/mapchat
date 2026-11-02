@@ -167,3 +167,55 @@ test("WebSocket session validation and room routing", async t => {
   });
 });
 
+test("WebSocket handshakes respect revocation and shutdown during database work", async t => {
+  for (const action of ["revoke", "shutdown"]) {
+    await t.test(action + " rejects a pending handshake", { timeout: 5000 }, async context => {
+      const userId = new ObjectId(), token = randomBytes(32).toString("base64url");
+      const hash = createHash("sha256").update(token).digest("hex");
+      let active = true, started, release;
+      const lookupStarted = new Promise(resolve => { started = resolve; });
+      const recentRooms = new Promise(resolve => { release = resolve; });
+      const database = {
+        sessions: { findOne: async () => active ? {
+          _id: hash, userId, authenticated: true, expiresAt: new Date(Date.now() + 60_000),
+        } : null },
+        users: { findOne: async () => ({
+          _id: userId, username: "Visitor", passwordHash: "fixture", lastRoomId: null, createdAt: new Date(),
+        }) },
+        messages: { aggregate: () => ({ toArray: () => { started(); return recentRooms; } }) },
+      };
+      const server = createServer((_request, response) => response.end());
+      const live = attachWebSocket(server, database);
+      let socket;
+      context.after(async () => {
+        release([]); socket?.terminate(); await live.close();
+        await new Promise(resolve => server.close(resolve));
+      });
+      server.listen(0, "127.0.0.1"); await once(server, "listening");
+      const response = new Promise((resolve, reject) => {
+        socket = new WebSocket("ws://127.0.0.1:" + server.address().port + "/ws", {
+          headers: { Cookie: "wolfchatter_session=" + token, Origin: "http://localhost:3000" },
+        });
+        socket.on("error", reject);
+        socket.once("open", () => resolve(101));
+        socket.once("unexpected-response", (_request, reply) => { reply.resume(); resolve(reply.statusCode); socket.close(); });
+      });
+      await Promise.race([lookupStarted, response.then(status => {
+        throw new Error("Handshake finished before the controlled lookup: " + status);
+      })]);
+      if (action === "revoke") {
+        active = false;
+        live.revokeSession(hash);
+        release([]);
+        assert.equal(await response, 401, "a revoked session must not complete its upgrade");
+      } else {
+        const shutdown = live.close();
+        const status = await Promise.race([response, sleep(300).then(() => null)]);
+        release([]);
+        await shutdown;
+        assert.equal(status, 503, "shutdown must reject pending upgrades without waiting for the database");
+      }
+    });
+  }
+});
+

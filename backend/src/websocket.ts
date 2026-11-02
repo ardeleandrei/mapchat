@@ -61,6 +61,7 @@ export function attachWebSocket(
     perMessageDeflate: false,
   });
   const peers = new Map<WebSocket, Peer>();
+  const pendingUpgrades = new Map<Duplex, string>();
   const deletedRooms = new Set<string>();
   const attempts = new Map<string, { count: number; until: number }>();
   const allowedOrigins = new Set((
@@ -70,7 +71,8 @@ export function attachWebSocket(
   let closing = false;
 
   function reject(socket: Duplex, status: number, reason: string) {
-    if (!socket.destroyed) socket.end(
+    pendingUpgrades.delete(socket);
+    if (!socket.destroyed && !socket.writableEnded) socket.end(
       "HTTP/1.1 " + status + " " + reason +
       "\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
     );
@@ -161,7 +163,10 @@ export function attachWebSocket(
     socket.on("error", () => {});
     const upgradeTimeout = setTimeout(() => socket.destroy(), 10_000);
     upgradeTimeout.unref();
-    socket.once("close", () => clearTimeout(upgradeTimeout));
+    socket.once("close", () => {
+      clearTimeout(upgradeTimeout);
+      pendingUpgrades.delete(socket);
+    });
     void (async () => {
       if (new URL(request.url ?? "/", "http://localhost").pathname !== "/ws") {
         reject(socket, 404, "Not Found"); return;
@@ -176,14 +181,19 @@ export function attachWebSocket(
       if (budget.until <= now) { budget.count = 0; budget.until = now + 60_000; }
       attempts.set(ip, budget);
       if (++budget.count > 30) { reject(socket, 429, "Too Many Requests"); return; }
+      const hash = sessionHash(request.headers.cookie);
+      if (!hash) { reject(socket, 401, "Unauthorized"); return; }
+      // Revocation must include handshakes awaiting asynchronous database work.
+      pendingUpgrades.set(socket, hash);
       const user = await sessions.findUser(request.headers.cookie);
       if (!user) { reject(socket, 401, "Unauthorized"); return; }
       const recent = user.registered ? await roomsRepository.recent(user.id, 20) : [];
-      if (socket.destroyed) return;
+      if (socket.destroyed || !pendingUpgrades.has(socket)) return;
       if (closing || peers.size >= 500 ||
           [...peers.values()].filter(peer => peer.ip === ip).length >= 20) {
         reject(socket, 503, "Service Unavailable"); return;
       }
+      pendingUpgrades.delete(socket);
       clearTimeout(upgradeTimeout);
       wss.handleUpgrade(request, socket, head, ws => connect(ws, request, user.id, recent.map(row => row.room.id)));
     })().catch(() => reject(socket, 503, "Service Unavailable"));
@@ -228,6 +238,9 @@ export function attachWebSocket(
   };
 
   function revokeSession(hash: string) {
+    for (const [socket, pendingHash] of pendingUpgrades) {
+      if (pendingHash === hash) reject(socket, 401, "Unauthorized");
+    }
     for (const peer of peers.values()) {
       if (sessionHash(peer.cookie) === hash) {
         peer.revision++;
@@ -242,6 +255,7 @@ export function attachWebSocket(
     closing = true;
     clearInterval(heartbeat);
     server.off("upgrade", upgrade);
+    for (const socket of pendingUpgrades.keys()) reject(socket, 503, "Service Unavailable");
     const force = setTimeout(() => {
       for (const peer of peers.values()) peer.socket.terminate();
     }, 2000);

@@ -1,6 +1,7 @@
 import { ObjectId, MongoServerError, type Filter } from "mongodb";
 import type { Database, MessageDocument } from "../db.js";
 import type { RoomReadRepository } from "../types/repository.types.js";
+import { RoomUnavailableError } from "../errors/RoomUnavailableError.js";
 
 export function createRoomReadRepository(database: Database): RoomReadRepository {
   return {
@@ -38,6 +39,12 @@ export function createRoomReadRepository(database: Database): RoomReadRepository
         // Concurrent first reads may race to insert the unique marker. Retry
         // against the winner, preserving the furthest read position.
         await database.roomReads.updateOne(filter, update);
+      }
+      // Deletion can finish after service validation but before this write.
+      // Either deletion cleans up the marker, or this post-write check does.
+      if (!await database.rooms.findOne({ _id: filter.roomId, deletedAt: { $exists: false } }, { projection: { _id: 1 } })) {
+        await database.roomReads.deleteOne(filter);
+        throw new RoomUnavailableError();
       }
     },
   };

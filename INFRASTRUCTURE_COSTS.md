@@ -8,7 +8,7 @@ Deploy the existing Docker image to **Azure App Service for Linux**. Each enviro
 
 - Separate staging and production apps, App Service plans, Atlas clusters, credentials, and hostnames. Staging is a standalone environment, not an App Service deployment slot.
 - Target West Europe, subject to App Service and Atlas tier availability. Keep the application and database in the same region where supported. [Atlas region availability](https://www.mongodb.com/docs/atlas/reference/microsoft-azure/).
-- Assume 730 app-hosting hours per month, light staging traffic, and up to approximately 50 concurrent production connections. This is a sizing assumption to validate with load tests, not a capacity guarantee.
+- Assume 730 app-hosting hours per month, light staging traffic, and a small text-chat production workload. Maximum concurrent users and message throughput have not been measured. The code's 500-connection limit is configurable and is not evidence of hosting capacity; validate capacity with load tests before making a user-count claim.
 - Staging fits within Atlas Free's 512 MB; production data and indexes fit within Flex's 5 GB. Budget for under 10 GB/month of application outbound traffic and modest log ingestion. [Atlas tiers](https://www.mongodb.com/pricing).
 - Azure compute/registry figures below are rounded budget allowances, not verified West Europe quotations. Recheck regional prices in the [Azure calculator](https://azure.microsoft.com/en-us/pricing/calculator/) before provisioning. Usage allowances are estimates, not billing caps. No promotional credits or reservations are assumed.
 
